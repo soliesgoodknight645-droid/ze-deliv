@@ -21,9 +21,12 @@ type Props = {
   whatsappSuporte: string;
   /** Dados do cliente do pedido pago — usados pra reaproveitar no upsell. */
   cliente: DadosClienteUpsell;
+  /** Controle da roleta vem do componente pai (PixPagamento) que detecta a
+   *  transicao de status. Centralizamos o controle pra a roleta abrir
+   *  automaticamente mesmo quando a transicao acontece via polling. */
+  roletaAberta: boolean;
+  onFecharRoleta: () => void;
 };
-
-const CHAVE_ROLETA_VISTA = (numero: string) => `ze:roleta-vista:${numero}`;
 
 const TOTAL_SEGUNDOS = 30 * 60; // 30 minutos
 const FASE_PREPARO = 8 * 60;     // 0-8min: em preparo
@@ -36,27 +39,9 @@ export function PagamentoConfirmado({
   receiptUrl,
   whatsappSuporte,
   cliente,
+  roletaAberta,
+  onFecharRoleta,
 }: Props) {
-  // Mostra a roleta UMA vez por pedido. A flag em localStorage evita reabrir
-  // toda vez que a pessoa volta nessa pagina.
-  const [roletaAberta, setRoletaAberta] = useState(false);
-  useEffect(() => {
-    try {
-      const visto = localStorage.getItem(CHAVE_ROLETA_VISTA(numero));
-      if (!visto) {
-        // pequeno delay pra dar tempo da animacao do "pagamento confirmado" rolar
-        const t = setTimeout(() => setRoletaAberta(true), 900);
-        return () => clearTimeout(t);
-      }
-    } catch {}
-  }, [numero]);
-
-  const fecharRoleta = () => {
-    setRoletaAberta(false);
-    try {
-      localStorage.setItem(CHAVE_ROLETA_VISTA(numero), "1");
-    } catch {}
-  };
 
   // Marca de tempo do pagamento. Se o backend nao mandou paid_at por algum motivo,
   // usamos o "primeiro Date.now()" desta sessao como fallback (evita o cronometro
@@ -244,7 +229,7 @@ export function PagamentoConfirmado({
         numero={numero}
         cliente={cliente}
         abrir={roletaAberta}
-        onFechar={fecharRoleta}
+        onFechar={onFecharRoleta}
       />
     </div>
   );

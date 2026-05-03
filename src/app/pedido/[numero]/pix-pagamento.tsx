@@ -18,6 +18,8 @@ type Props = {
   cliente: DadosClienteUpsell;
 };
 
+const CHAVE_ROLETA_VISTA = (numero: string) => `ze:roleta-vista:${numero}`;
+
 export function PixPagamento({
   numero,
   qrCode,
@@ -31,6 +33,7 @@ export function PixPagamento({
   const [status, setStatus] = useState(initialStatus);
   const [paidAt, setPaidAt] = useState<string | null>(initialPaidAt ?? null);
   const [verificando, setVerificando] = useState(false);
+  const [roletaAberta, setRoletaAberta] = useState(false);
 
   const pago = status === "pago" || status === "concluido";
 
@@ -60,6 +63,30 @@ export function PixPagamento({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pago, numero]);
 
+  // Abre a roleta automaticamente assim que vira pago (via polling OU ao
+  // chegar na pagina ja paga). Controlado neste nivel pra nao depender da
+  // montagem tardia do PagamentoConfirmado. A flag de localStorage garante
+  // que a pessoa nao veja a roleta de novo se ja fechou.
+  useEffect(() => {
+    if (!pago) return;
+    let visto = false;
+    try {
+      visto = !!localStorage.getItem(CHAVE_ROLETA_VISTA(numero));
+    } catch {
+      // sem localStorage (modo anonimo etc) — abre mesmo assim
+    }
+    if (visto) return;
+    const t = setTimeout(() => setRoletaAberta(true), 900);
+    return () => clearTimeout(t);
+  }, [pago, numero]);
+
+  const fecharRoleta = () => {
+    setRoletaAberta(false);
+    try {
+      localStorage.setItem(CHAVE_ROLETA_VISTA(numero), "1");
+    } catch {}
+  };
+
   if (pago) {
     return (
       <PagamentoConfirmado
@@ -68,6 +95,8 @@ export function PixPagamento({
         receiptUrl={receiptUrl}
         whatsappSuporte={whatsappSuporte}
         cliente={cliente}
+        roletaAberta={roletaAberta}
+        onFecharRoleta={fecharRoleta}
       />
     );
   }
