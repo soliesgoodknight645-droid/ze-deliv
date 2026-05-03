@@ -189,7 +189,6 @@ export async function criarPedidoUpsell(
           neighborhood: enderecoRef?.neighborhood ?? "",
           city: enderecoRef?.city ?? "",
           state: enderecoRef?.state ?? "",
-          reference: enderecoRef?.reference ?? "",
         },
         itens: input.itens.map((i) => ({
           id: i.produtoId,
