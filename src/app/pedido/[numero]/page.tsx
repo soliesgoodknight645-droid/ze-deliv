@@ -35,7 +35,7 @@ export default async function PedidoPage({ params }: { params: Promise<Params> }
   const { data: pedido } = await sb
     .from("pedidos")
     .select(
-      "id,numero,status,forma_pagamento,total,cliente_nome,cliente_telefone,endereco,criado_em,pix_qr_code,pix_qr_image,receipt_url",
+      "id,numero,status,forma_pagamento,total,cliente_nome,cliente_telefone,cliente_cpf,endereco,criado_em,pix_qr_code,pix_qr_image,receipt_url,paid_at",
     )
     .eq("numero", numero)
     .maybeSingle();
@@ -54,6 +54,7 @@ export default async function PedidoPage({ params }: { params: Promise<Params> }
   const endereco = pedido.endereco as Record<string, string>;
   const previsao = new Date(new Date(pedido.criado_em as string).getTime() + 40 * 60 * 1000)
     .toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+  const jaPago = pedido.status === "pago" || pedido.status === "concluido";
 
   const qrCodeTexto = (pedido.pix_qr_code as string | null) ?? null;
   const imagemSalva = (pedido.pix_qr_image as string | null) ?? null;
@@ -71,24 +72,26 @@ export default async function PedidoPage({ params }: { params: Promise<Params> }
     <div className="min-h-screen bg-brand-gray">
       <Header />
       <div className="max-w-screen-md mx-auto px-4 py-6">
-        <div className="bg-white rounded-2xl shadow-sm p-6 text-center mb-4">
-          <div className="w-16 h-16 mx-auto mb-3 rounded-full bg-green-50 flex items-center justify-center">
-            <CheckCircle2 className="w-9 h-9 text-green-500" />
-          </div>
-          <h1 className="font-extrabold text-2xl text-brand-dark mb-1 font-display">Pedido recebido!</h1>
-          <p className="text-sm text-gray-500">{STATUS_LABEL[pedido.status] ?? pedido.status}</p>
+        {!jaPago && (
+          <div className="bg-white rounded-2xl shadow-sm p-6 text-center mb-4">
+            <div className="w-16 h-16 mx-auto mb-3 rounded-full bg-green-50 flex items-center justify-center">
+              <CheckCircle2 className="w-9 h-9 text-green-500" />
+            </div>
+            <h1 className="font-extrabold text-2xl text-brand-dark mb-1 font-display">Pedido recebido!</h1>
+            <p className="text-sm text-gray-500">{STATUS_LABEL[pedido.status] ?? pedido.status}</p>
 
-          <div className="mt-5 inline-flex items-center gap-2 bg-brand-yellow/15 border border-brand-yellow/40 rounded-full px-4 h-9">
-            <Receipt className="w-4 h-4 text-brand-dark" />
-            <span className="text-sm font-bold text-brand-dark">#{numero}</span>
-            <CopiarNumero numero={numero} />
-          </div>
+            <div className="mt-5 inline-flex items-center gap-2 bg-brand-yellow/15 border border-brand-yellow/40 rounded-full px-4 h-9">
+              <Receipt className="w-4 h-4 text-brand-dark" />
+              <span className="text-sm font-bold text-brand-dark">#{numero}</span>
+              <CopiarNumero numero={numero} />
+            </div>
 
-          <div className="mt-4 inline-flex items-center gap-2 text-sm text-brand-dark">
-            <Clock className="w-4 h-4 text-brand-yellow" />
-            Previsão de entrega: <span className="font-bold">{previsao}</span> (até 40 min)
+            <div className="mt-4 inline-flex items-center gap-2 text-sm text-brand-dark">
+              <Clock className="w-4 h-4 text-brand-yellow" />
+              Previsão de entrega: <span className="font-bold">{previsao}</span> (até 40 min)
+            </div>
           </div>
-        </div>
+        )}
 
         {pedido.forma_pagamento === "pix" && (
           <PixPagamento
@@ -97,8 +100,36 @@ export default async function PedidoPage({ params }: { params: Promise<Params> }
             qrImage={qrImagemFinal}
             receiptUrl={(pedido.receipt_url as string | null) ?? null}
             initialStatus={pedido.status as string}
+            initialPaidAt={(pedido.paid_at as string | null) ?? null}
             whatsappSuporte={whatsappSuporte}
+            cliente={{
+              nome: pedido.cliente_nome as string,
+              telefone: pedido.cliente_telefone as string,
+              cpf: (pedido.cliente_cpf as string | null) ?? "",
+              endereco: {
+                cep: endereco.cep ?? "",
+                street: endereco.street ?? "",
+                number: endereco.number ?? "",
+                complement: endereco.complement ?? "",
+                neighborhood: endereco.neighborhood ?? "",
+                city: endereco.city ?? "",
+                state: endereco.state ?? "",
+                reference: endereco.reference ?? "",
+              },
+            }}
           />
+        )}
+
+        {jaPago && (
+          <div className="bg-white rounded-2xl shadow-sm p-4 mb-4 flex items-center gap-3">
+            <div className="flex-1">
+              <p className="text-[11px] uppercase font-semibold text-gray-400 tracking-wide">
+                Número do pedido
+              </p>
+              <p className="text-base font-extrabold text-brand-dark">#{numero}</p>
+            </div>
+            <CopiarNumero numero={numero} />
+          </div>
         )}
 
         {pedido.forma_pagamento === "card" && (

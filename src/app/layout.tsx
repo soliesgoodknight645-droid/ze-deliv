@@ -3,9 +3,11 @@ import Script from "next/script";
 import { Inter, Plus_Jakarta_Sans } from "next/font/google";
 import { Toaster } from "sonner";
 import { CartProvider } from "@/contexts/CartContext";
+import { UpsellProvider } from "@/contexts/UpsellContext";
 import { CartSheet } from "@/components/CartSheet";
 import { FloatingCartBar } from "@/components/FloatingCartBar";
 import { AgeGate } from "@/components/AgeGate";
+import { UtmifyScripts } from "@/components/UtmifyScripts";
 import "./globals.css";
 
 const fontSans = Inter({ subsets: ["latin"], variable: "--font-sans", display: "swap" });
@@ -35,11 +37,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="pt-BR" className={`${fontSans.variable} ${fontDisplay.variable}`}>
       <body className="font-sans bg-white text-brand-dark min-h-screen">
         <CartProvider>
-          <AgeGate />
-          <div className="min-h-screen flex flex-col">{children}</div>
-          <FloatingCartBar />
-          <CartSheet />
-          <Toaster position="top-center" richColors closeButton />
+          <UpsellProvider>
+            <AgeGate />
+            <div className="min-h-screen flex flex-col">{children}</div>
+            <FloatingCartBar />
+            <CartSheet />
+            <Toaster position="top-center" richColors closeButton />
+          </UpsellProvider>
         </CartProvider>
         <Script id="microsoft-clarity" strategy="afterInteractive">
           {`(function(c,l,a,r,i,t,y){
@@ -48,6 +52,7 @@ t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;
 y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
 })(window, document, "clarity", "script", "wjwwvnf403");`}
         </Script>
+        <UtmifyScripts />
       </body>
     </html>
   );

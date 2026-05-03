@@ -1,9 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Copy, CheckCircle2, MessageCircle, RefreshCcw } from "lucide-react";
+import { Copy, MessageCircle, RefreshCcw } from "lucide-react";
 import { toast } from "sonner";
 import { linkWhatsApp } from "@/lib/utils";
+import { PagamentoConfirmado } from "./pagamento-confirmado";
+import type { DadosClienteUpsell } from "@/contexts/UpsellContext";
 
 type Props = {
   numero: string;
@@ -11,11 +13,23 @@ type Props = {
   qrImage: string | null;
   receiptUrl?: string | null;
   initialStatus: string;
+  initialPaidAt?: string | null;
   whatsappSuporte: string;
+  cliente: DadosClienteUpsell;
 };
 
-export function PixPagamento({ numero, qrCode, qrImage, receiptUrl, initialStatus, whatsappSuporte }: Props) {
+export function PixPagamento({
+  numero,
+  qrCode,
+  qrImage,
+  receiptUrl,
+  initialStatus,
+  initialPaidAt,
+  whatsappSuporte,
+  cliente,
+}: Props) {
   const [status, setStatus] = useState(initialStatus);
+  const [paidAt, setPaidAt] = useState<string | null>(initialPaidAt ?? null);
   const [verificando, setVerificando] = useState(false);
 
   const pago = status === "pago" || status === "concluido";
@@ -24,9 +38,11 @@ export function PixPagamento({ numero, qrCode, qrImage, receiptUrl, initialStatu
     setVerificando(true);
     try {
       const r = await fetch(`/api/pagamento/status/${encodeURIComponent(numero)}`, { cache: "no-store" });
-      const j = (await r.json()) as { status?: string };
+      const j = (await r.json()) as { status?: string; paidAt?: string | null };
+      const eraPago = status === "pago" || status === "concluido";
       if (j.status) setStatus(j.status);
-      if (j.status === "pago") toast.success("Pagamento confirmado!");
+      if (j.paidAt) setPaidAt(j.paidAt);
+      if (!eraPago && j.status === "pago") toast.success("Pagamento confirmado!");
     } catch {
       toast.error("Erro ao verificar pagamento");
     } finally {
@@ -34,39 +50,25 @@ export function PixPagamento({ numero, qrCode, qrImage, receiptUrl, initialStatu
     }
   }
 
-  // polling automatico a cada 8s enquanto nao pagou
+  // polling automatico a cada 6s enquanto nao pagou
   useEffect(() => {
     if (pago) return;
     const t = setInterval(() => {
       void verificar();
-    }, 8000);
+    }, 6000);
     return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pago, numero]);
 
   if (pago) {
     return (
-      <div className="bg-white rounded-2xl shadow-sm p-5 mb-4">
-        <div className="flex items-center gap-3">
-          <div className="w-12 h-12 rounded-full bg-green-50 flex items-center justify-center flex-shrink-0">
-            <CheckCircle2 className="w-7 h-7 text-green-500" />
-          </div>
-          <div className="flex-1">
-            <p className="font-bold text-brand-dark">Pagamento confirmado</p>
-            <p className="text-xs text-gray-500">Já estamos preparando seu pedido.</p>
-          </div>
-        </div>
-        {receiptUrl && (
-          <a
-            href={receiptUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="mt-4 block text-center w-full h-11 rounded-xl border border-gray-200 text-sm font-semibold text-brand-dark flex items-center justify-center"
-          >
-            Ver comprovante
-          </a>
-        )}
-      </div>
+      <PagamentoConfirmado
+        numero={numero}
+        paidAt={paidAt}
+        receiptUrl={receiptUrl}
+        whatsappSuporte={whatsappSuporte}
+        cliente={cliente}
+      />
     );
   }
 

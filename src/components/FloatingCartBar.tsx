@@ -6,7 +6,7 @@ import { ChevronRight } from "lucide-react";
 import { useCart } from "@/contexts/CartContext";
 import { fmtPreco } from "@/lib/utils";
 
-const ROTAS_OCULTAS = ["/carrinho", "/checkout", "/admin", "/pedido"];
+const ROTAS_OCULTAS = ["/carrinho", "/checkout", "/admin", "/pedido", "/upsell"];
 
 export function FloatingCartBar() {
   const { itens, totalValor, totalItens, pronto, abrirDrawer } = useCart();

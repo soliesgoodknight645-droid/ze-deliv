@@ -255,6 +255,21 @@ export function CheckoutClient({ metodosAtivos }: { metodosAtivos: MetodosAtivos
       return;
     }
 
+    // SMS de "carrinho/CPF abandonado" — dispara assim que a pessoa clica em
+    // continuar/finalizar com CPF valido. Limite de 1 SMS por CPF a cada 30
+    // dias e o controle de rate fica no backend (tabela sms_enviados). Fire
+    // and forget: nao bloqueia o checkout se a Axtron estiver fora do ar.
+    void fetch("/api/sms/disparar", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        cpf: dados.cpf,
+        nome: dados.name,
+        telefone: dados.phone,
+      }),
+      keepalive: true,
+    }).catch(() => {});
+
     setEnviando(true);
     try {
       const r = await criarPedido({

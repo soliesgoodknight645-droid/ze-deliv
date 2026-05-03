@@ -103,8 +103,14 @@ export async function POST(req: NextRequest) {
     webhook_payload: payload as unknown as Record<string, unknown>,
   };
   if (transactionId) updates.gateway_id = transactionId;
-  if (isPago) updates.status = "pago";
-  else if (novoStatusInterno) updates.status = novoStatusInterno;
+  if (isPago) {
+    updates.status = "pago";
+    // Marca o horario do pagamento (usado pro cronometro de entrega).
+    // Preferimos o timestamp que o gateway mandou; se nao tiver, usa agora.
+    updates.paid_at = tx.payedAt ?? new Date().toISOString();
+  } else if (novoStatusInterno) {
+    updates.status = novoStatusInterno;
+  }
 
   const { error: errUpd } = await sb.from("pedidos").update(updates).eq("id", pedidoId);
   if (errUpd) {
