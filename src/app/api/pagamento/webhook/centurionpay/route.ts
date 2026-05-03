@@ -98,6 +98,16 @@ export async function POST(req: NextRequest) {
   const isPago = statusCru === "paid" || statusCru === "approved";
   const novoStatusInterno = statusCru ? mapearStatusPedido(statusCru) : null;
 
+  // Nunca rebaixa pedidos que ja avancaram no funil (admin pode ter marcado pago).
+  const { data: pedAtual } = await sb
+    .from("pedidos")
+    .select("status")
+    .eq("id", pedidoId)
+    .maybeSingle();
+  const statusAtual = pedAtual?.status as string | undefined;
+  const STATUS_TRAVADOS = ["pago", "em_separacao", "em_entrega", "concluido"];
+  const ehTravado = statusAtual ? STATUS_TRAVADOS.includes(statusAtual) : false;
+
   const updates: Record<string, unknown> = {
     gateway_status: t.status ?? evento,
     webhook_payload: payload as unknown as Record<string, unknown>,
@@ -106,7 +116,7 @@ export async function POST(req: NextRequest) {
   if (isPago) {
     updates.status = "pago";
     if (t.paidAt) updates.paid_at = t.paidAt;
-  } else if (novoStatusInterno) {
+  } else if (novoStatusInterno && !ehTravado) {
     updates.status = novoStatusInterno;
   }
 

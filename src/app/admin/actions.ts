@@ -1,6 +1,7 @@
 "use server";
 
 import { redirect } from "next/navigation";
+import { revalidatePath } from "next/cache";
 import { createSupabaseServer } from "@/lib/supabase/server";
 import { createSupabaseAdmin } from "@/lib/supabase/admin";
 
@@ -35,11 +36,40 @@ async function ensureAdmin() {
 }
 
 export async function atualizarStatus(pedidoId: string, status: StatusPedido) {
-  const { admin } = await ensureAdmin();
+  const { admin, user } = await ensureAdmin();
 
   const patch: Record<string, unknown> = { status };
-  if (status === "pago") patch.paid_at = new Date().toISOString();
+  if (status === "pago") {
+    patch.paid_at = new Date().toISOString();
+    // Tag pra deixar claro no admin que foi marcado manualmente. Tambem evita
+    // que webhooks futuros de "pending" rebaixem o pedido (os webhooks ja
+    // checam status, mas registrar fica bom pra auditoria).
+    patch.gateway_status = "ADMIN_MARCADO_PAGO";
+  }
 
-  const { error } = await admin.from("pedidos").update(patch).eq("id", pedidoId);
+  const { data: pedido, error } = await admin
+    .from("pedidos")
+    .update(patch)
+    .eq("id", pedidoId)
+    .select("numero")
+    .single();
   if (error) throw new Error(error.message);
+
+  // Evento de auditoria — bom pro admin ver o historico
+  await admin.from("eventos_pedido").insert({
+    pedido_id: pedidoId,
+    tipo: status === "pago" ? "pagamento_manual" : `status_${status}`,
+    dados: {
+      novo_status: status,
+      autor: user.email,
+      via: "painel_admin",
+    },
+  });
+
+  // Forca o Next a re-renderizar essas paginas com o novo status
+  revalidatePath("/admin");
+  if (pedido?.numero) {
+    revalidatePath(`/admin/${pedido.numero}`);
+    revalidatePath(`/pedido/${pedido.numero}`);
+  }
 }

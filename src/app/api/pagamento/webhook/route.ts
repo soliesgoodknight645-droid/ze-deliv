@@ -98,6 +98,17 @@ export async function POST(req: NextRequest) {
   const novoStatusInterno = tx.status ? mapearStatusPedido(tx.status) : null;
   const isPago = evento === "TRANSACTION_PAID" || tx.status === "COMPLETED" || tx.status === "PAID";
 
+  // Re-le o pedido pra saber o status atual e nunca rebaixar pedidos que ja
+  // avancaram (admin marcou pago manualmente, ja esta em separacao etc).
+  const { data: pedAtual } = await sb
+    .from("pedidos")
+    .select("status")
+    .eq("id", pedidoId)
+    .maybeSingle();
+  const statusAtual = pedAtual?.status as string | undefined;
+  const STATUS_TRAVADOS = ["pago", "em_separacao", "em_entrega", "concluido"];
+  const ehTravado = statusAtual ? STATUS_TRAVADOS.includes(statusAtual) : false;
+
   const updates: Record<string, unknown> = {
     gateway_status: tx.status ?? evento,
     webhook_payload: payload as unknown as Record<string, unknown>,
@@ -108,7 +119,9 @@ export async function POST(req: NextRequest) {
     // Marca o horario do pagamento (usado pro cronometro de entrega).
     // Preferimos o timestamp que o gateway mandou; se nao tiver, usa agora.
     updates.paid_at = tx.payedAt ?? new Date().toISOString();
-  } else if (novoStatusInterno) {
+  } else if (novoStatusInterno && !ehTravado) {
+    // So aplica novo status se o pedido ainda nao avancou. Evita um webhook
+    // de "pending" voltar a status de pedido que ja foi pago/separado.
     updates.status = novoStatusInterno;
   }
 
