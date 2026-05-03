@@ -31,10 +31,12 @@ export type EnviarSmsResultado = {
 
 /** Monta a mensagem com o primeiro nome, garantindo limite de 159 chars. */
 export function montarMensagemSms(nome: string): string {
-  const primeiro = (nome ?? "")
-    .trim()
-    .split(/\s+/)[0]
-    ?.replace(/[^\p{L}\p{N}\-']/gu, "") || "amigo";
+  // Faixa Latin-1 (À-ÿ) cobre acentos PT-BR sem precisar do flag 'u' (target ES5).
+  const primeiro =
+    (nome ?? "")
+      .trim()
+      .split(/\s+/)[0]
+      ?.replace(/[^A-Za-zÀ-ÿ0-9\-']/g, "") || "amigo";
   const msg = `Zé Delivery - ${primeiro} seu pedido está quase completo!`;
   return msg.slice(0, SMS_MAX_CARACTERES);
 }
