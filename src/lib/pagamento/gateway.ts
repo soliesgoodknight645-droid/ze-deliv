@@ -191,30 +191,6 @@ export type CriarPixUnificadoResposta = {
 };
 
 /**
- * OneTimePay: na prática o valor final costuma ser `amount - discount` (ou o
- * painel ignora `amount` líquido sem `discount`). Upsell manda metadados do
- * subtotal e do desconto; quando batem com `input.amount`, repassamos bruto + desconto.
- */
-function otpAmountEDesconto(input: CriarPixUnificadoInput): { amount: number; discount?: number } {
-  const m = input.metadata;
-  if (!m || typeof m !== "object") return { amount: input.amount };
-
-  const sub = m["subtotal_sem_desconto"];
-  const desc = m["desconto_reais"];
-  if (typeof sub !== "number" || typeof desc !== "number") return { amount: input.amount };
-  if (desc < 0.005 || sub < desc + 0.005) return { amount: input.amount };
-
-  const esperado = Math.round((sub - desc) * 100) / 100;
-  const liquido = Math.round(input.amount * 100) / 100;
-  if (Math.abs(esperado - liquido) > 0.03) return { amount: input.amount };
-
-  return {
-    amount: Number(sub.toFixed(2)),
-    discount: Number(desc.toFixed(2)),
-  };
-}
-
-/**
  * Cria uma cobranca PIX no gateway recebido.
  * Se gateway nao for passado, usa o ativo no momento.
  */
@@ -225,11 +201,12 @@ export async function criarCobrancaPix(
   const gateway = gatewayForcado ?? (await obterGatewayAtivo());
 
   if (gateway === "onetimepay") {
-    const { amount: otpAmount, discount: otpDiscount } = otpAmountEDesconto(input);
+    // OneTimePay: o PIX segue o campo `amount` do body. Enviar `amount` = subtotal
+    // + `discount` em reais faz a API cobrar o subtotal quando ela ignora `discount`
+    // (caso comum) — upsell ficava sem os 50%. Sempre enviar só o valor líquido.
     const r = await otp.criarCobrancaPix({
       identifier: input.identifier,
-      amount: otpAmount,
-      discount: otpDiscount,
+      amount: input.amount,
       client: input.client,
       products: input.itens.map((i) => ({
         id: i.id,
