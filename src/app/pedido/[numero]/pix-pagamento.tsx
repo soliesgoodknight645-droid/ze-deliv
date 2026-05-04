@@ -42,11 +42,14 @@ export function PixPagamento({
   const roletaJaAgendadaRef = useRef(false);
   /** No browser o id é number; tipos do Node misturam Timeout no worker de build. */
   const roletaTimeoutRef = useRef<number | null>(null);
+  /** Descarta respostas antigas de polls sobrepostos ou fora de ordem. */
+  const verificarGenRef = useRef(0);
 
   const pago = status === "pago" || status === "concluido";
 
   useEffect(() => {
     roletaJaAgendadaRef.current = false;
+    verificarGenRef.current = 0;
   }, [numero]);
 
   useEffect(() => {
@@ -77,12 +80,16 @@ export function PixPagamento({
   }, [numero]);
 
   const verificar = useCallback(async () => {
+    const gen = ++verificarGenRef.current;
     setVerificando(true);
     try {
-      const r = await fetch(`/api/pagamento/status/${encodeURIComponent(numero)}`, {
-        cache: "no-store",
-      });
+      const r = await fetch(
+        `/api/pagamento/status/${encodeURIComponent(numero)}?t=${Date.now()}`,
+        { cache: "no-store", headers: { "Cache-Control": "no-cache" } },
+      );
+      if (gen !== verificarGenRef.current) return;
       const j = (await r.json()) as { status?: string; paidAt?: string | null; erro?: string };
+      if (gen !== verificarGenRef.current) return;
       if (!r.ok || j.erro) return;
       if (!j.status || typeof j.status !== "string") return;
 
@@ -92,15 +99,20 @@ export function PixPagamento({
       const novo = j.status;
       if (novo === prev) return;
 
-      const eraPago = prev === "pago" || prev === "concluido";
+      // Resposta atrasada não pode "desmarcar" um pagamento já detectado.
+      const jaEraPago = prev === "pago" || prev === "concluido";
+      const novoEPositivo = novo === "pago" || novo === "concluido";
+      if (jaEraPago && !novoEPositivo) return;
+
+      const eraPago = jaEraPago;
       setStatus(novo);
 
       if (!eraPago && novo === "pago") toast.success("Pagamento confirmado!");
       if (!eraPago && (novo === "pago" || novo === "concluido")) agendarRoleta();
     } catch {
-      toast.error("Erro ao verificar pagamento");
+      if (gen === verificarGenRef.current) toast.error("Erro ao verificar pagamento");
     } finally {
-      setVerificando(false);
+      if (gen === verificarGenRef.current) setVerificando(false);
     }
   }, [numero, agendarRoleta]);
 
@@ -111,6 +123,16 @@ export function PixPagamento({
     const id = window.setInterval(() => void verificar(), 3000);
     return () => window.clearInterval(id);
   }, [pago, numero, verificar]);
+
+  // Ao voltar pra aba, conferir na hora (intervalo costuma ser atrasado em background).
+  useEffect(() => {
+    if (pago) return;
+    const onVis = () => {
+      if (document.visibilityState === "visible") void verificar();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
+  }, [pago, verificar]);
 
   // Pagina ja abre pago (F5): o polling nao roda — agenda a roleta aqui.
   useEffect(() => {

@@ -4,6 +4,15 @@ import { consultarStatusPedido, type GatewayId } from "@/lib/pagamento/gateway";
 
 export const dynamic = "force-dynamic";
 
+const NO_STORE = {
+  "Cache-Control": "private, no-store, no-cache, max-age=0, must-revalidate",
+  Pragma: "no-cache",
+} as const;
+
+function json(data: unknown, status = 200) {
+  return NextResponse.json(data, { status, headers: NO_STORE });
+}
+
 type Params = { numero: string };
 
 export async function GET(_req: Request, { params }: { params: Promise<Params> }) {
@@ -17,11 +26,11 @@ export async function GET(_req: Request, { params }: { params: Promise<Params> }
     .maybeSingle();
 
   if (!pedido) {
-    return NextResponse.json({ erro: "pedido nao encontrado" }, { status: 404 });
+    return json({ erro: "pedido nao encontrado" }, 404);
   }
 
   if (pedido.status === "pago" || pedido.status === "concluido") {
-    return NextResponse.json({
+    return json({
       status: pedido.status,
       gatewayStatus: pedido.gateway_status,
       paidAt: pedido.paid_at,
@@ -48,13 +57,13 @@ export async function GET(_req: Request, { params }: { params: Promise<Params> }
           updates.paid_at = new Date().toISOString();
         }
         await sb.from("pedidos").update(updates).eq("id", pedido.id);
-        return NextResponse.json({
+        return json({
           status: r.statusInterno,
           gatewayStatus: r.gatewayStatus,
           paidAt: updates.paid_at ?? pedido.paid_at,
         });
       }
-      return NextResponse.json({
+      return json({
         status: pedido.status,
         gatewayStatus: r.gatewayStatus,
         paidAt: pedido.paid_at,
@@ -64,7 +73,7 @@ export async function GET(_req: Request, { params }: { params: Promise<Params> }
     console.error("[status] consulta gateway falhou", e);
   }
 
-  return NextResponse.json({
+  return json({
     status: pedido.status,
     gatewayStatus: pedido.gateway_status,
     paidAt: pedido.paid_at,
