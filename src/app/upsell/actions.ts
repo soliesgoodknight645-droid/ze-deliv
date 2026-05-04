@@ -168,6 +168,21 @@ export async function criarPedidoUpsell(
 
     const enderecoRef = ref.endereco as Record<string, string> | null;
 
+    // MarchaBB e CenturionPay somam `items` e frequentemente usam essa soma
+    // como valor da cobranca (ignorando discrepancia com o campo `amount`).
+    // Se mandassemos cada produto com preco cheio, o PIX saia pelo subtotal
+    // integral — o desconto de 50% sumia. Para o PIX bater com `total` (ja
+    // com desconto), enviamos UMA linha agregada com o valor final.
+    // OneTimePay nao usa products no body; so o `amount` importa (ja certo).
+    const itensParaGateway = [
+      {
+        id: "upsell-ze50",
+        nome: `Pedido ${pedido.numero} • ${CUPOM_UPSELL.CODIGO} (-${CUPOM_UPSELL.DESCONTO_PERCENT}%)`,
+        quantidade: 1,
+        precoUnitario: total,
+      },
+    ];
+
     const pix = await criarCobrancaPix(
       {
         identifier: pedido.numero,
@@ -190,18 +205,15 @@ export async function criarPedidoUpsell(
           city: enderecoRef?.city ?? "",
           state: enderecoRef?.state ?? "",
         },
-        itens: input.itens.map((i) => ({
-          id: i.produtoId,
-          nome: i.nome,
-          quantidade: i.quantidade,
-          precoUnitario: i.precoUnitario,
-        })),
+        itens: itensParaGateway,
         metadata: {
           pedidoNumero: pedido.numero,
           provider: "ze-chegou-24h",
           upsell: true,
           pedidoRef: ref.numero,
           cupom: CUPOM_UPSELL.CODIGO,
+          subtotal_sem_desconto: subtotal,
+          desconto_reais: calc.desconto,
         },
         callbackUrl,
       },
