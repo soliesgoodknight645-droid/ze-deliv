@@ -150,8 +150,64 @@ Depois volte na Vercel: **Settings → Environment Variables** → atualize `NEX
 
 ---
 
+## Duas operações (A/B) — mesmo Supabase, Git e Vercel separados
+
+Você pode manter **dois sites** apontando para o **mesmo projeto Supabase** (mesmo catálogo e pedidos), com **repos Git diferentes**, **projetos Vercel diferentes** e **domínios diferentes** — útil para teste A/B.
+
+### Operação B (este clone / `ze-deliv`)
+
+| O quê | Valor |
+|--------|--------|
+| Repositório Git | `https://github.com/soliesgoodknight645-droid/ze-deliv` (remote `ze-deliv`) |
+| Time na Vercel | **xdsad's projects** (slug: `xdsads-projects-324eb859`) |
+| Projeto Vercel | **`ze-deliv`** (URLs tipo `ze-deliv-….vercel.app`) |
+| Domínio customizado | [https://ze-express24h.club/](https://ze-express24h.club/) |
+| Supabase | O mesmo `.env` / mesmas env vars na Vercel do outro ambiente |
+
+**`NEXT_PUBLIC_SITE_URL` na Vercel deste projeto** deve ser `https://ze-express24h.club` (ou a URL `.vercel.app` de staging), para webhooks e links do checkout baterem com o domínio certo.
+
+### Por que o `vercel deploy` local às vezes falha
+
+Se o `git remote origin` aponta para **outro** GitHub (ex.: `alvezemigh-create/ze-exprex`), o CLI da Vercel pode tentar o **projeto já ligado a esse repo** em **outra conta** → erro `Could not retrieve Project Settings` / 403.
+
+**Correção:** na pasta `app-novo`, associe o diretório ao projeto certo (após criar token — ver abaixo):
+
+```bash
+cd app-novo
+# Windows PowerShell: defina o token novo (não commite)
+$env:VERCEL_TOKEN = "seu_token_novo"
+npm run vercel:link:operacao-b
+```
+
+Ou em uma linha: `npx vercel link --yes --scope xdsads-projects-324eb859 --project ze-deliv --token SEU_TOKEN`
+
+Se aparecer **“Which remote do you want to connect?”**, escolha **`ze-deliv`** (`soliesgoodknight645-droid/ze-deliv`), **não** o `origin` apontando pro outro GitHub.
+
+Isso recria `.vercel/project.json` (pastas `.vercel` **não** vão pro Git — estão no `.gitignore`).
+
+### Token da Vercel que vazou — o que fazer **agora**
+
+Eu **não consigo revogar** pelo painel da sua conta; faça aí em 1 minuto:
+
+1. Abra [vercel.com/account/tokens](https://vercel.com/account/tokens) (login na conta **xdsad's projects** / a que usa o projeto `ze-deliv`).
+2. **Delete** o token que foi colado em chat / exposto.
+3. **Create Token** → copie o novo **uma vez**.
+4. Coloque no `app-novo/.env.local`: `VERCEL_TOKEN=...` (arquivo já está ignorado pelo Git).
+5. **Não** cole o novo token em chat nem em issue pública.
+
+Deploy local:
+
+```bash
+npx vercel deploy --prod --yes
+```
+
+Deploy principal continua sendo **push no `main` do `ze-deliv`** se o projeto na Vercel estiver com Git integrado a esse repo.
+
+---
+
 ## Segurança final (CHECKLIST antes de divulgar o site)
 
+- [ ] **Token da Vercel** que vazou → apagar em [Account → Tokens](https://vercel.com/account/tokens) e criar outro; guardar só em `.env.local` como `VERCEL_TOKEN`
 - [ ] **Regenerar `SUPABASE_SERVICE_ROLE_KEY`** no Supabase (a antiga foi exposta no chat)
    - Settings → API → "Reset service_role key"
    - Atualiza nas env vars da Vercel e do `.env.local`

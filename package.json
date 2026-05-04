@@ -10,7 +10,8 @@
     "start": "next start",
     "lint": "next lint",
     "gerar-mapa-imagens": "node scripts/gerar-mapa-imagens.mjs",
-    "seed": "node scripts/seed-supabase.mjs"
+    "seed": "node scripts/seed-supabase.mjs",
+    "vercel:link:operacao-b": "vercel link --yes --scope xdsads-projects-324eb859 --project ze-deliv"
   },
   "dependencies": {
     "@supabase/ssr": "^0.10.2",
