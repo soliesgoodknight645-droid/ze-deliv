@@ -4,6 +4,7 @@ import { createSupabaseAdmin } from "@/lib/supabase/admin";
 import { criarCobrancaPix, obterGatewayAtivo } from "@/lib/pagamento/gateway";
 import {
   CUPOM_UPSELL,
+  aplicarPrecoLiquidoNosItens,
   calcularDescontoUpsell,
   validarSubtotalUpsell,
 } from "@/lib/cupom-upsell";
@@ -100,6 +101,12 @@ export async function criarPedidoUpsell(
   const calc = calcularDescontoUpsell(subtotal);
   const total = calc.total;
 
+  const itensLiquido = aplicarPrecoLiquidoNosItens(
+    input.itens.map((i) => ({ ...i })),
+    subtotal,
+    total,
+  );
+
   const numero = gerarNumero();
   const gatewayAtivo = await obterGatewayAtivo();
   const observacoesFinais = [
@@ -137,7 +144,7 @@ export async function criarPedidoUpsell(
   }
 
   const { error: errItens } = await sb.from("itens_pedido").insert(
-    input.itens.map((i) => ({
+    itensLiquido.map((i) => ({
       pedido_id: pedido.id,
       produto_id: i.produtoId,
       produto_slug: i.slug,
@@ -168,20 +175,14 @@ export async function criarPedidoUpsell(
 
     const enderecoRef = ref.endereco as Record<string, string> | null;
 
-    // MarchaBB e CenturionPay somam `items` e frequentemente usam essa soma
-    // como valor da cobranca (ignorando discrepancia com o campo `amount`).
-    // Se mandassemos cada produto com preco cheio, o PIX saia pelo subtotal
-    // integral — o desconto de 50% sumia. Para o PIX bater com `total` (ja
-    // com desconto), enviamos UMA linha agregada com o valor final.
-    // OneTimePay nao usa products no body; so o `amount` importa (ja certo).
-    const itensParaGateway = [
-      {
-        id: "upsell-ze50",
-        nome: `Pedido ${pedido.numero} • ${CUPOM_UPSELL.CODIGO} (-${CUPOM_UPSELL.DESCONTO_PERCENT}%)`,
-        quantidade: 1,
-        precoUnitario: total,
-      },
-    ];
+    // Itens já com preço proporcional ao total líquido — soma das linhas = `total`
+    // e bate com `amount` (gateways que ignoram `amount` e somam items ficam corretos).
+    const itensParaGateway = itensLiquido.map((i) => ({
+      id: i.produtoId,
+      nome: i.nome,
+      quantidade: i.quantidade,
+      precoUnitario: i.precoUnitario,
+    }));
 
     const pix = await criarCobrancaPix(
       {

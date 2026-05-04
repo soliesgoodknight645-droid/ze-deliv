@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Copy, MessageCircle, RefreshCcw } from "lucide-react";
 import { toast } from "sonner";
 import { linkWhatsApp } from "@/lib/utils";
@@ -35,50 +35,88 @@ export function PixPagamento({
   const [verificando, setVerificando] = useState(false);
   const [roletaAberta, setRoletaAberta] = useState(false);
 
+  /** Sempre reflete o ultimo status (evita closure stale no polling). */
+  const statusRef = useRef(initialStatus);
+  statusRef.current = status;
+
+  const roletaJaAgendadaRef = useRef(false);
+  /** No browser o id é number; tipos do Node misturam Timeout no worker de build. */
+  const roletaTimeoutRef = useRef<number | null>(null);
+
   const pago = status === "pago" || status === "concluido";
 
-  async function verificar() {
+  useEffect(() => {
+    roletaJaAgendadaRef.current = false;
+  }, [numero]);
+
+  useEffect(() => {
+    return () => {
+      roletaJaAgendadaRef.current = false;
+      if (roletaTimeoutRef.current != null) {
+        window.clearTimeout(roletaTimeoutRef.current);
+        roletaTimeoutRef.current = null;
+      }
+    };
+  }, []);
+
+  const agendarRoleta = useCallback(() => {
+    if (roletaJaAgendadaRef.current) return;
+    let visto = false;
+    try {
+      visto = !!localStorage.getItem(CHAVE_ROLETA_VISTA(numero));
+    } catch {
+      /* modo anonimo etc. */
+    }
+    if (visto) return;
+    roletaJaAgendadaRef.current = true;
+    if (roletaTimeoutRef.current != null) window.clearTimeout(roletaTimeoutRef.current);
+    roletaTimeoutRef.current = window.setTimeout(() => {
+      roletaTimeoutRef.current = null;
+      setRoletaAberta(true);
+    }, 900) as unknown as number;
+  }, [numero]);
+
+  const verificar = useCallback(async () => {
     setVerificando(true);
     try {
-      const r = await fetch(`/api/pagamento/status/${encodeURIComponent(numero)}`, { cache: "no-store" });
-      const j = (await r.json()) as { status?: string; paidAt?: string | null };
-      const eraPago = status === "pago" || status === "concluido";
-      if (j.status) setStatus(j.status);
+      const r = await fetch(`/api/pagamento/status/${encodeURIComponent(numero)}`, {
+        cache: "no-store",
+      });
+      const j = (await r.json()) as { status?: string; paidAt?: string | null; erro?: string };
+      if (!r.ok || j.erro) return;
+      if (!j.status || typeof j.status !== "string") return;
+
       if (j.paidAt) setPaidAt(j.paidAt);
-      if (!eraPago && j.status === "pago") toast.success("Pagamento confirmado!");
+
+      const prev = statusRef.current;
+      const novo = j.status;
+      if (novo === prev) return;
+
+      const eraPago = prev === "pago" || prev === "concluido";
+      setStatus(novo);
+
+      if (!eraPago && novo === "pago") toast.success("Pagamento confirmado!");
+      if (!eraPago && (novo === "pago" || novo === "concluido")) agendarRoleta();
     } catch {
       toast.error("Erro ao verificar pagamento");
     } finally {
       setVerificando(false);
     }
-  }
+  }, [numero, agendarRoleta]);
 
-  // polling automatico a cada 6s enquanto nao pagou
+  // Consulta imediata + a cada 3s enquanto nao pago.
   useEffect(() => {
     if (pago) return;
-    const t = setInterval(() => {
-      void verificar();
-    }, 6000);
-    return () => clearInterval(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pago, numero]);
+    void verificar();
+    const id = window.setInterval(() => void verificar(), 3000);
+    return () => window.clearInterval(id);
+  }, [pago, numero, verificar]);
 
-  // Abre a roleta automaticamente assim que vira pago (via polling OU ao
-  // chegar na pagina ja paga). Controlado neste nivel pra nao depender da
-  // montagem tardia do PagamentoConfirmado. A flag de localStorage garante
-  // que a pessoa nao veja a roleta de novo se ja fechou.
+  // Pagina ja abre pago (F5): o polling nao roda — agenda a roleta aqui.
   useEffect(() => {
     if (!pago) return;
-    let visto = false;
-    try {
-      visto = !!localStorage.getItem(CHAVE_ROLETA_VISTA(numero));
-    } catch {
-      // sem localStorage (modo anonimo etc) — abre mesmo assim
-    }
-    if (visto) return;
-    const t = setTimeout(() => setRoletaAberta(true), 900);
-    return () => clearTimeout(t);
-  }, [pago, numero]);
+    agendarRoleta();
+  }, [pago, numero, agendarRoleta]);
 
   const fecharRoleta = () => {
     setRoletaAberta(false);
@@ -162,7 +200,7 @@ export function PixPagamento({
       </button>
 
       <p className="text-[11px] text-gray-400 text-center mt-3">
-        Verificamos automaticamente a cada poucos segundos.
+        Verificamos automaticamente a cada 3 segundos.
       </p>
 
       <div className="mt-5 pt-4 border-t border-gray-100">

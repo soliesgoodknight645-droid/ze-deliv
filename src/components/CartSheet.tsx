@@ -1,17 +1,45 @@
 "use client";
 
+import { useMemo } from "react";
 import Image from "next/image";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { Drawer } from "vaul";
 import { Minus, Plus, ShoppingBag, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { useCart } from "@/contexts/CartContext";
+import { useUpsell } from "@/contexts/UpsellContext";
+import {
+  aplicarPrecoLiquidoNosItens,
+  calcularDescontoUpsell,
+  validarSubtotalUpsell,
+} from "@/lib/cupom-upsell";
 import { mensagemErroPedidoMinimo, PEDIDO_MINIMO_REAIS, subtotalAbaixoDoMinimo } from "@/lib/pedido-minimo";
 import { fmtPreco } from "@/lib/utils";
 
 export function CartSheet() {
   const router = useRouter();
+  const pathname = usePathname();
+  const upsell = useUpsell();
   const { itens, totalValor, alterarQtd, remover, drawerAberto, fecharDrawer } = useCart();
+
+  const naUpsell = pathname === "/upsell" && upsell.ativo;
+  const validacaoUpsell = naUpsell ? validarSubtotalUpsell(totalValor) : null;
+  const cupomUpsellAplica = validacaoUpsell?.ok === true;
+  const calcUpsell = cupomUpsellAplica ? calcularDescontoUpsell(totalValor) : null;
+
+  const precosLiquidoPorId = useMemo(() => {
+    if (!cupomUpsellAplica || !calcUpsell) return null;
+    const ajustados = aplicarPrecoLiquidoNosItens(
+      itens.map((i) => ({
+        produtoId: i.produtoId,
+        quantidade: i.quantidade,
+        precoUnitario: i.precoUnitario,
+      })),
+      totalValor,
+      calcUpsell.total,
+    );
+    return new Map(ajustados.map((x) => [x.produtoId, x.precoUnitario]));
+  }, [cupomUpsellAplica, calcUpsell, itens, totalValor]);
 
   const irParaCheckout = () => {
     if (subtotalAbaixoDoMinimo(totalValor)) {
@@ -66,7 +94,20 @@ export function CartSheet() {
                     </div>
                     <div className="flex-1 min-w-0">
                       <p className="text-sm text-brand-dark line-clamp-1 leading-tight">{i.nome}</p>
-                      <p className="text-sm font-bold text-brand-dark mt-0.5">{fmtPreco(i.precoUnitario)}</p>
+                      {cupomUpsellAplica && precosLiquidoPorId ? (
+                        <div className="mt-0.5 leading-tight">
+                          <p className="text-xs text-gray-400 line-through">
+                            {fmtPreco(i.precoUnitario)}
+                          </p>
+                          <p className="text-sm font-bold text-brand-red">
+                            {fmtPreco(precosLiquidoPorId.get(i.produtoId) ?? i.precoUnitario)} un.
+                          </p>
+                        </div>
+                      ) : (
+                        <p className="text-sm font-bold text-brand-dark mt-0.5">
+                          {fmtPreco(i.precoUnitario)}
+                        </p>
+                      )}
                       <div className="flex items-center gap-1 mt-1.5">
                         <button
                           type="button"
@@ -102,7 +143,16 @@ export function CartSheet() {
               <div className="px-5 pt-3 pb-5 border-t border-gray-100 bg-white space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="text-sm text-gray-600">Total</span>
-                  <span className="font-extrabold text-lg text-brand-dark">{fmtPreco(totalValor)}</span>
+                  {calcUpsell ? (
+                    <div className="text-right leading-tight">
+                      <p className="text-xs text-gray-400 line-through">{fmtPreco(totalValor)}</p>
+                      <span className="font-extrabold text-lg text-brand-red">
+                        {fmtPreco(calcUpsell.total)}
+                      </span>
+                    </div>
+                  ) : (
+                    <span className="font-extrabold text-lg text-brand-dark">{fmtPreco(totalValor)}</span>
+                  )}
                 </div>
                 {subtotalAbaixoDoMinimo(totalValor) && (
                   <p className="text-[11px] leading-snug text-amber-800 bg-amber-50 rounded-xl px-3 py-2 border border-amber-100">

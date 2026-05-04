@@ -48,3 +48,38 @@ export function validarSubtotalUpsell(subtotal: number): ValidacaoCupom {
   }
   return { ok: true };
 }
+
+/** Linha com preço unitário (carrinho ou payload do upsell). */
+export type LinhaComPreco = {
+  quantidade: number;
+  precoUnitario: number;
+};
+
+/**
+ * Reduz `precoUnitario` de cada linha proporcionalmente para a soma bater com
+ * `totalLiquido` (ex.: após 50% OFF). Garante alinhamento entre itens no banco,
+ * tela do pedido e gateways que somam `items` (ex.: MarchaBB / Centurion).
+ */
+export function aplicarPrecoLiquidoNosItens<T extends LinhaComPreco>(
+  itens: T[],
+  subtotal: number,
+  totalLiquido: number,
+): T[] {
+  if (!itens.length || subtotal <= 0) {
+    return itens.map((i) => ({ ...i }));
+  }
+  const ratio = totalLiquido / subtotal;
+  const out: T[] = itens.map((i) => ({
+    ...i,
+    precoUnitario: Math.round(i.precoUnitario * ratio * 100) / 100,
+  }));
+  const sum = out.reduce((s, i) => s + i.quantidade * i.precoUnitario, 0);
+  const drift = Math.round((totalLiquido - sum) * 100) / 100;
+  if (Math.abs(drift) >= 0.001 && out.length > 0) {
+    const last = { ...out[out.length - 1] };
+    const q = last.quantidade;
+    last.precoUnitario = Math.round((last.precoUnitario + drift / q) * 100) / 100;
+    out[out.length - 1] = last;
+  }
+  return out;
+}
