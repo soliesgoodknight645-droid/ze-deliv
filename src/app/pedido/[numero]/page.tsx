@@ -35,7 +35,7 @@ export default async function PedidoPage({ params }: { params: Promise<Params> }
   const { data: pedido } = await sb
     .from("pedidos")
     .select(
-      "id,numero,status,forma_pagamento,total,cliente_nome,cliente_telefone,cliente_cpf,endereco,criado_em,pix_qr_code,pix_qr_image,receipt_url,paid_at",
+      "id,numero,status,forma_pagamento,total,cliente_nome,cliente_telefone,cliente_cpf,endereco,criado_em,pix_qr_code,pix_qr_image,paid_at",
     )
     .eq("numero", numero)
     .maybeSingle();
@@ -98,7 +98,6 @@ export default async function PedidoPage({ params }: { params: Promise<Params> }
             numero={numero}
             qrCode={qrCodeTexto}
             qrImage={qrImagemFinal}
-            receiptUrl={(pedido.receipt_url as string | null) ?? null}
             initialStatus={pedido.status as string}
             initialPaidAt={(pedido.paid_at as string | null) ?? null}
             whatsappSuporte={whatsappSuporte}

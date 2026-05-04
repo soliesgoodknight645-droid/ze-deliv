@@ -11,7 +11,6 @@ type Props = {
   numero: string;
   qrCode: string | null;
   qrImage: string | null;
-  receiptUrl?: string | null;
   initialStatus: string;
   initialPaidAt?: string | null;
   whatsappSuporte: string;
@@ -24,7 +23,6 @@ export function PixPagamento({
   numero,
   qrCode,
   qrImage,
-  receiptUrl,
   initialStatus,
   initialPaidAt,
   whatsappSuporte,
@@ -152,7 +150,6 @@ export function PixPagamento({
       <PagamentoConfirmado
         numero={numero}
         paidAt={paidAt}
-        receiptUrl={receiptUrl}
         whatsappSuporte={whatsappSuporte}
         cliente={cliente}
         roletaAberta={roletaAberta}

@@ -6,9 +6,12 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
+import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import { CUPOM_UPSELL } from "@/lib/cupom-upsell";
 
 const CHAVE_STORAGE = "ze:upsell:v1";
@@ -46,14 +49,33 @@ type UpsellCtx = {
   ativar: (input: { pedidoRef: string; cliente: DadosClienteUpsell }) => void;
   desativar: () => void;
   pronto: boolean;
+  /** Só preenchido na rota /upsell — usado pelo CartSheet pra mesmo fluxo do botão amarelo. */
+  registrarPagarPixUpsell: (fn: (() => Promise<void>) | null) => void;
+  executarPagarPixUpsell: () => Promise<void>;
 };
 
 const Ctx = createContext<UpsellCtx | null>(null);
 
 export function UpsellProvider({ children }: { children: ReactNode }) {
+  const router = useRouter();
+  const pagarPixUpsellRef = useRef<(() => Promise<void>) | null>(null);
   const [estado, setEstado] = useState<EstadoPersistido | null>(null);
   const [agora, setAgora] = useState<number>(() => Date.now());
   const [pronto, setPronto] = useState(false);
+
+  const registrarPagarPixUpsell = useCallback((fn: (() => Promise<void>) | null) => {
+    pagarPixUpsellRef.current = fn;
+  }, []);
+
+  const executarPagarPixUpsell = useCallback(async () => {
+    const fn = pagarPixUpsellRef.current;
+    if (fn) {
+      await fn();
+      return;
+    }
+    toast.info("Abra a página do cupom pra gerar o PIX com o desconto.");
+    router.push("/upsell");
+  }, [router]);
 
   // hidrata do localStorage
   useEffect(() => {
@@ -125,8 +147,19 @@ export function UpsellProvider({ children }: { children: ReactNode }) {
       ativar,
       desativar,
       pronto,
+      registrarPagarPixUpsell,
+      executarPagarPixUpsell,
     }),
-    [estado, tempoRestanteMs, tempoRestanteSeg, ativar, desativar, pronto],
+    [
+      estado,
+      tempoRestanteMs,
+      tempoRestanteSeg,
+      ativar,
+      desativar,
+      pronto,
+      registrarPagarPixUpsell,
+      executarPagarPixUpsell,
+    ],
   );
 
   return <Ctx.Provider value={valor}>{children}</Ctx.Provider>;

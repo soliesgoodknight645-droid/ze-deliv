@@ -7,7 +7,6 @@ import {
   Clock,
   MessageCircle,
   Package,
-  Receipt,
   Truck,
 } from "lucide-react";
 import { linkWhatsApp } from "@/lib/utils";
@@ -17,7 +16,6 @@ import type { DadosClienteUpsell } from "@/contexts/UpsellContext";
 type Props = {
   numero: string;
   paidAt: string | null;
-  receiptUrl?: string | null;
   whatsappSuporte: string;
   /** Dados do cliente do pedido pago — usados pra reaproveitar no upsell. */
   cliente: DadosClienteUpsell;
@@ -36,7 +34,6 @@ const FASE_SAINDO = 18 * 60;     // 8-18min: saindo
 export function PagamentoConfirmado({
   numero,
   paidAt,
-  receiptUrl,
   whatsappSuporte,
   cliente,
   roletaAberta,
@@ -182,18 +179,6 @@ export function PagamentoConfirmado({
       </div>
 
       {/* === Acoes === */}
-      {receiptUrl && (
-        <a
-          href={receiptUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="bg-white border border-gray-200 rounded-2xl px-5 h-12 flex items-center justify-center gap-2 text-sm font-semibold text-brand-dark active:scale-[0.98] transition"
-        >
-          <Receipt className="w-4 h-4 text-gray-500" />
-          Ver comprovante de pagamento
-        </a>
-      )}
-
       <a
         href={linkWhatsApp(
           whatsappSuporte,

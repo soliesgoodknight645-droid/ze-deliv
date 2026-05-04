@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   AlertCircle,
@@ -96,13 +96,14 @@ export function UpsellClient({ secoes }: { secoes: Secao[] }) {
   const podeFinalizar =
     validacao.ok && totalItens > 0 && upsell.tempoRestanteSeg > 0 && !enviando;
 
-  const finalizar = async () => {
+  const finalizar = useCallback(async () => {
+    const v = validarSubtotalUpsell(totalValor);
     if (!upsell.ativo || !upsell.pedidoRef) {
       toast.error("Cupom não está mais válido");
       return;
     }
-    if (!validacao.ok) {
-      toast.error(validacao.motivo);
+    if (!v.ok) {
+      toast.error(v.motivo);
       return;
     }
     if (upsell.tempoRestanteSeg <= 0) {
@@ -141,7 +142,21 @@ export function UpsellClient({ secoes }: { secoes: Secao[] }) {
     } finally {
       setEnviando(false);
     }
-  };
+  }, [
+    itens,
+    limpar,
+    router,
+    totalValor,
+    upsell.ativo,
+    upsell.desativar,
+    upsell.pedidoRef,
+    upsell.tempoRestanteSeg,
+  ]);
+
+  useEffect(() => {
+    upsell.registrarPagarPixUpsell(finalizar);
+    return () => upsell.registrarPagarPixUpsell(null);
+  }, [upsell.registrarPagarPixUpsell, finalizar]);
 
   if (!upsell.pronto) {
     return (
