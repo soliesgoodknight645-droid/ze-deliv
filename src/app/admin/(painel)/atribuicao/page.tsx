@@ -3,7 +3,9 @@ import {
   BarChart3,
   CreditCard,
   Gauge,
+  LayoutGrid,
   MousePointerClick,
+  Package,
   Search,
   ShoppingBag,
   TrendingUp,
@@ -116,8 +118,16 @@ type PedidoBase = {
   conversion_at: string | null;
 };
 
+type ItemDoPedido = {
+  produto_nome: string;
+  quantidade: number;
+  preco_unitario: number | string;
+  produto_id: string;
+  produtos: { categoria_id: string } | { categoria_id: string }[] | null;
+};
+
 type PedidoComItens = PedidoBase & {
-  itens_pedido: { produto_nome: string; quantidade: number }[] | null;
+  itens_pedido: ItemDoPedido[] | null;
 };
 
 export default async function DashboardAtribuicaoPage({
@@ -147,7 +157,8 @@ export default async function DashboardAtribuicaoPage({
        traffic_keyword, traffic_searchterm, traffic_matchtype, traffic_device,
        traffic_creative, traffic_gclid, traffic_landing_page, traffic_referrer,
        first_visit_at, conversion_at,
-       itens_pedido(produto_nome, quantidade)`,
+       itens_pedido(produto_nome, quantidade, preco_unitario, produto_id,
+         produtos(categoria_id))`,
     )
     .gte("criado_em", deDate.toISOString())
     .lte("criado_em", ateDate.toISOString())
@@ -170,8 +181,12 @@ export default async function DashboardAtribuicaoPage({
     );
   }
 
-  const { data: pedidosRaw, error } = await query;
+  const [{ data: pedidosRaw, error }, { data: catsList }] = await Promise.all([
+    query,
+    admin.from("categorias").select("id, nome").order("ordem", { ascending: true }),
+  ]);
   const pedidos = (pedidosRaw ?? []) as unknown as PedidoComItens[];
+  const catNomePorId = new Map((catsList ?? []).map((c) => [c.id as string, c.nome as string]));
 
   // ===== KPIs =====
   const totalLeads = pedidos.length;
@@ -190,6 +205,80 @@ export default async function DashboardAtribuicaoPage({
   const rankSearchterm = rankear(pedidos, "traffic_searchterm").slice(0, 15);
   const rankSourceMedium = rankear(pedidos, "traffic_source", true).slice(0, 15);
   const rankDevice = rankear(pedidos, "traffic_device").slice(0, 10);
+
+  // ===== Faturamento por categoria e top produtos (apenas pagos) =====
+  // Cruza com os mesmos filtros do dashboard — mostra qual categoria/produto
+  // está vendendo dentro do período/origem selecionado.
+  const fatPorCategoria = new Map<string, { leads: number; pedidos: number; faturamento: number }>();
+  const topProdutos = new Map<
+    string,
+    { nome: string; quantidade: number; faturamento: number; pedidos: number }
+  >();
+  const idsPedidoPagosPorCat = new Map<string, Set<string>>();
+  const idsPedidoPagosPorProd = new Map<string, Set<string>>();
+
+  for (const p of pagos) {
+    const itens = p.itens_pedido ?? [];
+    const idsCatNoPedido = new Set<string>();
+    const idsProdNoPedido = new Set<string>();
+    for (const it of itens) {
+      const prod = Array.isArray(it.produtos) ? it.produtos[0] : it.produtos;
+      const catId = prod?.categoria_id ?? "sem_categoria";
+      const valor = Number(it.preco_unitario) * Number(it.quantidade);
+
+      if (!fatPorCategoria.has(catId)) {
+        fatPorCategoria.set(catId, { leads: 0, pedidos: 0, faturamento: 0 });
+      }
+      fatPorCategoria.get(catId)!.faturamento += valor;
+      idsCatNoPedido.add(catId);
+
+      const chaveProd = `${it.produto_id}::${it.produto_nome}`;
+      if (!topProdutos.has(chaveProd)) {
+        topProdutos.set(chaveProd, {
+          nome: it.produto_nome,
+          quantidade: 0,
+          faturamento: 0,
+          pedidos: 0,
+        });
+      }
+      const linha = topProdutos.get(chaveProd)!;
+      linha.quantidade += Number(it.quantidade);
+      linha.faturamento += valor;
+      idsProdNoPedido.add(chaveProd);
+    }
+    // contagem de "pedidos distintos" por categoria/produto (não item)
+    idsCatNoPedido.forEach((catId) => {
+      if (!idsPedidoPagosPorCat.has(catId)) idsPedidoPagosPorCat.set(catId, new Set());
+      idsPedidoPagosPorCat.get(catId)!.add(p.id);
+    });
+    idsProdNoPedido.forEach((k) => {
+      if (!idsPedidoPagosPorProd.has(k)) idsPedidoPagosPorProd.set(k, new Set());
+      idsPedidoPagosPorProd.get(k)!.add(p.id);
+    });
+  }
+
+  fatPorCategoria.forEach((agg, catId) => {
+    agg.pedidos = idsPedidoPagosPorCat.get(catId)?.size ?? 0;
+    agg.leads = agg.pedidos; // só pagos entram nessa visão
+  });
+  topProdutos.forEach((agg, k) => {
+    agg.pedidos = idsPedidoPagosPorProd.get(k)?.size ?? 0;
+  });
+
+  const rankCategoria: Ranking[] = Array.from(fatPorCategoria.entries())
+    .map(([catId, agg]) => ({
+      chave: catNomePorId.get(catId) ?? "Sem categoria",
+      leads: agg.leads,
+      pedidos: agg.pedidos,
+      faturamento: agg.faturamento,
+    }))
+    .sort((a, b) => b.faturamento - a.faturamento || b.pedidos - a.pedidos)
+    .slice(0, 15);
+
+  const rankProdutos = Array.from(topProdutos.values())
+    .sort((a, b) => b.faturamento - a.faturamento || b.quantidade - a.quantidade)
+    .slice(0, 15);
+  const totalFatProdutos = rankProdutos.reduce((s, r) => s + r.faturamento, 0);
 
   // ===== Faturamento por dia (gráfico) =====
   type Dia = { data: string; leads: number; pagos: number; faturamento: number };
@@ -426,7 +515,18 @@ export default async function DashboardAtribuicaoPage({
         <RankingCard titulo="Source / Medium" rankings={rankSourceMedium} Icon={MousePointerClick} />
       </div>
 
-      {/* ===== Rankings ===== */}
+      {/* ===== O que está vendendo (categoria + produtos) ===== */}
+      <div className="grid lg:grid-cols-2 gap-4 mb-5">
+        <RankingCard
+          titulo="Faturamento por categoria"
+          rankings={rankCategoria}
+          Icon={LayoutGrid}
+          subtitulo="Apenas pedidos pagos"
+        />
+        <ProdutosCard rankings={rankProdutos} totalFat={totalFatProdutos} />
+      </div>
+
+      {/* ===== Rankings de atribuição ===== */}
       <div className="grid lg:grid-cols-2 gap-4 mb-5">
         <RankingCard titulo="Campanhas" rankings={rankCampanha} Icon={MousePointerClick} />
         <RankingCard titulo="Grupos de anúncios" rankings={rankAdgroup} Icon={MousePointerClick} />
@@ -486,17 +586,22 @@ function RankingCard({
   titulo,
   rankings,
   Icon,
+  subtitulo,
 }: {
   titulo: string;
   rankings: Ranking[];
   Icon: typeof Users;
+  subtitulo?: string;
 }) {
   const max = rankings[0]?.faturamento ?? 0;
   return (
     <div className="bg-white rounded-2xl p-5 shadow-sm">
-      <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3 inline-flex items-center gap-1.5">
-        <Icon className="w-3.5 h-3.5" /> {titulo}
-      </h3>
+      <div className="flex items-start justify-between mb-3">
+        <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider inline-flex items-center gap-1.5">
+          <Icon className="w-3.5 h-3.5" /> {titulo}
+        </h3>
+        {subtitulo && <span className="text-[10px] text-gray-400">{subtitulo}</span>}
+      </div>
       {rankings.length === 0 ? (
         <p className="text-sm text-gray-400 text-center py-6">Sem dados no período.</p>
       ) : (
@@ -511,6 +616,58 @@ function RankingCard({
                   </span>
                   <span className="text-gray-500 flex-shrink-0">
                     {r.pedidos} ped · {r.leads} leads
+                  </span>
+                  <span className="font-extrabold text-brand-dark flex-shrink-0 min-w-[80px] text-right">
+                    {fmtPreco(r.faturamento)}
+                  </span>
+                </div>
+                <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-brand-yellow rounded-full"
+                    style={{ width: `${Math.max(2, pct)}%` }}
+                  />
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function ProdutosCard({
+  rankings,
+  totalFat,
+}: {
+  rankings: Array<{ nome: string; quantidade: number; faturamento: number; pedidos: number }>;
+  totalFat: number;
+}) {
+  const max = rankings[0]?.faturamento ?? 0;
+  return (
+    <div className="bg-white rounded-2xl p-5 shadow-sm">
+      <div className="flex items-start justify-between mb-3">
+        <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider inline-flex items-center gap-1.5">
+          <Package className="w-3.5 h-3.5" /> Produtos mais vendidos
+        </h3>
+        {totalFat > 0 && (
+          <span className="text-[10px] text-gray-400">Top 15 · pagos</span>
+        )}
+      </div>
+      {rankings.length === 0 ? (
+        <p className="text-sm text-gray-400 text-center py-6">Sem dados no período.</p>
+      ) : (
+        <ul className="space-y-2.5">
+          {rankings.map((r) => {
+            const pct = max > 0 ? (r.faturamento / max) * 100 : 0;
+            return (
+              <li key={r.nome}>
+                <div className="flex items-center justify-between gap-2 text-xs mb-1">
+                  <span className="font-semibold text-brand-dark truncate flex-1" title={r.nome}>
+                    {r.nome}
+                  </span>
+                  <span className="text-gray-500 flex-shrink-0">
+                    {r.quantidade} un · {r.pedidos} ped
                   </span>
                   <span className="font-extrabold text-brand-dark flex-shrink-0 min-w-[80px] text-right">
                     {fmtPreco(r.faturamento)}
