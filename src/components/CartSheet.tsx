@@ -24,11 +24,7 @@ export function CartSheet() {
 
   const validacaoUpsell = upsell.ativo ? validarSubtotalUpsell(totalValor) : null;
   const cupomUpsellAplica = validacaoUpsell?.ok === true;
-  const podePagarPixUpsell =
-    upsell.ativo &&
-    cupomUpsellAplica &&
-    itens.length > 0 &&
-    upsell.tempoRestanteSeg > 0;
+  const podePagarPixUpsell = upsell.ativo && cupomUpsellAplica && itens.length > 0;
   const calcUpsell = cupomUpsellAplica ? calcularDescontoUpsell(totalValor) : null;
 
   const precosLiquidoPorId = useMemo(() => {
@@ -189,11 +185,6 @@ export function CartSheet() {
                 {upsell.ativo && validacaoUpsell && !validacaoUpsell.ok && (
                   <p className="text-[11px] leading-snug text-yellow-900 bg-yellow-50 rounded-xl px-3 py-2 border border-yellow-200">
                     {validacaoUpsell.motivo}
-                  </p>
-                )}
-                {upsell.ativo && cupomUpsellAplica && upsell.tempoRestanteSeg <= 0 && (
-                  <p className="text-[11px] leading-snug text-red-900 bg-red-50 rounded-xl px-3 py-2 border border-red-100">
-                    O tempo do cupom acabou. Volte à página inicial pra um novo pedido.
                   </p>
                 )}
                 {podePagarPixUpsell ? (

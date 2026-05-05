@@ -5,9 +5,12 @@
 export const CUPOM_UPSELL = {
   CODIGO: "ZE50",
   DESCONTO_PERCENT: 50,
-  VALOR_MINIMO: 100,   // pedido upsell precisa atingir R$ 100,00
+  VALOR_MINIMO: 50,    // pedido upsell precisa atingir R$ 50,00
   VALOR_MAXIMO: 999,   // cupom nao se aplica a partir de R$ 1000,00
-  DURACAO_MS: 5 * 60 * 1000, // 5 minutos
+  /** Validade real do cupom — depois disso o server bloqueia. */
+  DURACAO_MS: 24 * 60 * 60 * 1000, // 24 horas
+  /** Cronometro de pressao mostrado pra o cliente (so visual, nao invalida o cupom). */
+  DURACAO_VITRINE_MS: 5 * 60 * 1000, // 5 minutos
 } as const;
 
 export type ResultadoCupom = {

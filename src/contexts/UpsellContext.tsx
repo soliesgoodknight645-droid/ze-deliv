@@ -14,7 +14,7 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { CUPOM_UPSELL } from "@/lib/cupom-upsell";
 
-const CHAVE_STORAGE = "ze:upsell:v1";
+const CHAVE_STORAGE = "ze:upsell:v2";
 
 export type DadosClienteUpsell = {
   nome: string;
@@ -35,7 +35,8 @@ export type DadosClienteUpsell = {
 
 type EstadoPersistido = {
   pedidoRef: string;
-  expiraEm: number; // ms epoch
+  ativadoEm: number; // ms epoch
+  expiraEm: number;  // ms epoch (validade real, ex.: 24h)
   cliente: DadosClienteUpsell;
 };
 
@@ -44,8 +45,12 @@ type UpsellCtx = {
   pedidoRef: string | null;
   expiraEm: number | null;
   cliente: DadosClienteUpsell | null;
+  /** Tempo ate expirar de verdade (validade real). Usado pra guards. */
   tempoRestanteMs: number;
   tempoRestanteSeg: number;
+  /** Cronometro de "vitrine" (pressao de marketing). NAO invalida o cupom. */
+  tempoVitrineMs: number;
+  tempoVitrineSeg: number;
   ativar: (input: { pedidoRef: string; cliente: DadosClienteUpsell }) => void;
   desativar: () => void;
   pronto: boolean;
@@ -113,9 +118,11 @@ export function UpsellProvider({ children }: { children: ReactNode }) {
 
   const ativar = useCallback(
     ({ pedidoRef, cliente }: { pedidoRef: string; cliente: DadosClienteUpsell }) => {
+      const agora = Date.now();
       const novo: EstadoPersistido = {
         pedidoRef,
-        expiraEm: Date.now() + CUPOM_UPSELL.DURACAO_MS,
+        ativadoEm: agora,
+        expiraEm: agora + CUPOM_UPSELL.DURACAO_MS,
         cliente,
       };
       setEstado(novo);
@@ -135,6 +142,10 @@ export function UpsellProvider({ children }: { children: ReactNode }) {
 
   const tempoRestanteMs = estado ? Math.max(0, estado.expiraEm - agora) : 0;
   const tempoRestanteSeg = Math.floor(tempoRestanteMs / 1000);
+  const tempoVitrineMs = estado
+    ? Math.max(0, estado.ativadoEm + CUPOM_UPSELL.DURACAO_VITRINE_MS - agora)
+    : 0;
+  const tempoVitrineSeg = Math.floor(tempoVitrineMs / 1000);
 
   const valor = useMemo<UpsellCtx>(
     () => ({
@@ -144,6 +155,8 @@ export function UpsellProvider({ children }: { children: ReactNode }) {
       cliente: estado?.cliente ?? null,
       tempoRestanteMs,
       tempoRestanteSeg,
+      tempoVitrineMs,
+      tempoVitrineSeg,
       ativar,
       desativar,
       pronto,
@@ -154,6 +167,8 @@ export function UpsellProvider({ children }: { children: ReactNode }) {
       estado,
       tempoRestanteMs,
       tempoRestanteSeg,
+      tempoVitrineMs,
+      tempoVitrineSeg,
       ativar,
       desativar,
       pronto,

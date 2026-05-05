@@ -93,8 +93,7 @@ export function UpsellClient({ secoes }: { secoes: Secao[] }) {
 
   const validacao = validarSubtotalUpsell(totalValor);
   const calc = useMemo(() => calcularDescontoUpsell(totalValor), [totalValor]);
-  const podeFinalizar =
-    validacao.ok && totalItens > 0 && upsell.tempoRestanteSeg > 0 && !enviando;
+  const podeFinalizar = validacao.ok && totalItens > 0 && !enviando;
 
   const finalizar = useCallback(async () => {
     const v = validarSubtotalUpsell(totalValor);
@@ -104,10 +103,6 @@ export function UpsellClient({ secoes }: { secoes: Secao[] }) {
     }
     if (!v.ok) {
       toast.error(v.motivo);
-      return;
-    }
-    if (upsell.tempoRestanteSeg <= 0) {
-      toast.error("Tempo do cupom esgotado");
       return;
     }
 
@@ -150,7 +145,6 @@ export function UpsellClient({ secoes }: { secoes: Secao[] }) {
     upsell.ativo,
     upsell.desativar,
     upsell.pedidoRef,
-    upsell.tempoRestanteSeg,
   ]);
 
   useEffect(() => {
@@ -167,7 +161,7 @@ export function UpsellClient({ secoes }: { secoes: Secao[] }) {
   }
   if (!upsell.ativo) return null;
 
-  const tempoCritico = upsell.tempoRestanteSeg <= 60;
+  const tempoCritico = upsell.tempoVitrineSeg <= 60;
   const faltaParaMin =
     validacao.ok || validacao.tipo === "acima"
       ? 0
@@ -198,7 +192,7 @@ export function UpsellClient({ secoes }: { secoes: Secao[] }) {
               Restam
             </p>
             <p className="font-extrabold text-xl tabular-nums leading-tight">
-              {formatarMmSs(upsell.tempoRestanteSeg)}
+              {formatarMmSs(upsell.tempoVitrineSeg)}
             </p>
           </div>
           <button
@@ -367,8 +361,8 @@ export function UpsellClient({ secoes }: { secoes: Secao[] }) {
             <div className="p-5 space-y-3">
               <RegraItem
                 numero={1}
-                titulo="Pedido mínimo de R$ 100,00"
-                texto="O carrinho precisa atingir R$ 100,00 (sem o desconto) pra o cupom liberar."
+                titulo={`Pedido mínimo de R$ ${CUPOM_UPSELL.VALOR_MINIMO},00`}
+                texto={`O carrinho precisa atingir R$ ${CUPOM_UPSELL.VALOR_MINIMO},00 (sem o desconto) pra o cupom liberar.`}
               />
               <RegraItem
                 numero={2}
