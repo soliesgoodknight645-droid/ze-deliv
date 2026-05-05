@@ -5,7 +5,7 @@ import { CheckCircle2, Clock, Home, MapPin, Phone, Receipt, User } from "lucide-
 import { Header } from "@/components/Header";
 import { Footer } from "@/components/Footer";
 import { createSupabaseAdmin } from "@/lib/supabase/admin";
-import { fmtPreco } from "@/lib/utils";
+import { fmtHoraBR, fmtPreco, MINUTOS_ENTREGA } from "@/lib/utils";
 import { obterWhatsappSuporte } from "@/lib/config-app";
 import { gerarQrCodeDataUrl } from "@/lib/pagamento/qrcode";
 import { pedidoStatusEhPosPagamento } from "@/lib/pedido-status";
@@ -53,8 +53,9 @@ export default async function PedidoPage({ params }: { params: Promise<Params> }
   ]);
 
   const endereco = pedido.endereco as Record<string, string>;
-  const previsao = new Date(new Date(pedido.criado_em as string).getTime() + 40 * 60 * 1000)
-    .toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+  const previsao = fmtHoraBR(
+    new Date(new Date(pedido.criado_em as string).getTime() + MINUTOS_ENTREGA * 60 * 1000),
+  );
   const jaPago = pedidoStatusEhPosPagamento(pedido.status as string);
 
   const qrCodeTexto = (pedido.pix_qr_code as string | null) ?? null;
@@ -89,7 +90,7 @@ export default async function PedidoPage({ params }: { params: Promise<Params> }
 
             <div className="mt-4 inline-flex items-center gap-2 text-sm text-brand-dark">
               <Clock className="w-4 h-4 text-brand-yellow" />
-              Previsão de entrega: <span className="font-bold">{previsao}</span> (até 40 min)
+              Previsão de entrega: <span className="font-bold">{previsao}</span> (até {MINUTOS_ENTREGA} min)
             </div>
           </div>
         )}

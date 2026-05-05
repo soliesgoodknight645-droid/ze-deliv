@@ -15,11 +15,28 @@ export function fmtPreco(valor: number): string {
 }
 
 // =====================================================================
+// Janela de entrega — ponto unico de verdade
+// =====================================================================
+/** Tempo maximo prometido pra entrega, em minutos. */
+export const MINUTOS_ENTREGA = 30 as const;
+
+// =====================================================================
 // Datas com fuso horário do Brasil (America/Sao_Paulo)
 // =====================================================================
 // O servidor (Vercel) roda em UTC. Usar `toLocaleString` sem timeZone
 // fixo faz aparecer 3h adiantado no SSR. Sempre forcamos `America/Sao_Paulo`.
 const FUSO_BR = "America/Sao_Paulo" as const;
+
+export function fmtHoraBR(d: Date | string | null | undefined): string {
+  if (!d) return "";
+  const date = typeof d === "string" ? new Date(d) : d;
+  if (isNaN(date.getTime())) return "";
+  return date.toLocaleTimeString("pt-BR", {
+    timeZone: FUSO_BR,
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
 
 export function fmtDataHoraBR(d: Date | string | null | undefined): string {
   if (!d) return "";

@@ -9,7 +9,7 @@ import { SafeProductImage } from "@/components/SafeProductImage";
 import { ProductActions } from "./product-actions";
 import { buscarProduto, listarProdutos, relacionadosDe } from "@/lib/data";
 import { imagemProduto } from "@/lib/imagens";
-import { calcDesconto, fmtPreco, precoFinal } from "@/lib/utils";
+import { calcDesconto, fmtPreco, MINUTOS_ENTREGA, precoFinal } from "@/lib/utils";
 
 export const revalidate = 300;
 export const dynamicParams = true;
@@ -123,7 +123,7 @@ export default async function ProdutoPage({ params }: { params: { slug: string }
           <div className="flex gap-4 mb-5">
             <div className="flex items-center gap-1.5 text-xs text-gray-500">
               <Truck className="w-3.5 h-3.5 text-brand-yellow" />
-              Até 40 min
+              Até {MINUTOS_ENTREGA} min
             </div>
             <div className="flex items-center gap-1.5 text-xs text-gray-500">
               <ShieldCheck className="w-3.5 h-3.5 text-brand-yellow" />
