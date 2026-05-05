@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { createSupabaseServer } from "@/lib/supabase/server";
 import { createSupabaseAdmin } from "@/lib/supabase/admin";
+import { broadcastStatusPedido } from "@/lib/realtime-pedido";
 
 export async function logout() {
   const sb = createSupabaseServer();
@@ -51,7 +52,7 @@ export async function atualizarStatus(pedidoId: string, status: StatusPedido) {
     .from("pedidos")
     .update(patch)
     .eq("id", pedidoId)
-    .select("numero")
+    .select("numero, paid_at, gateway_status")
     .single();
   if (error) throw new Error(error.message);
 
@@ -71,5 +72,11 @@ export async function atualizarStatus(pedidoId: string, status: StatusPedido) {
   if (pedido?.numero) {
     revalidatePath(`/admin/${pedido.numero}`);
     revalidatePath(`/pedido/${pedido.numero}`);
+    // Aviso instantaneo pra a tela do cliente (Realtime broadcast).
+    await broadcastStatusPedido(admin, pedido.numero as string, {
+      status,
+      paid_at: (pedido.paid_at as string | null) ?? null,
+      gateway_status: (pedido.gateway_status as string | null) ?? null,
+    });
   }
 }

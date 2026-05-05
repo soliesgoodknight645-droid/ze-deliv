@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createSupabaseAdmin } from "@/lib/supabase/admin";
 import { mapearStatusPedido } from "@/lib/centurionpay";
+import { broadcastStatusPedido } from "@/lib/realtime-pedido";
 import { revalidateTag } from "next/cache";
 
 // Webhook (postback) CenturionPay
@@ -153,6 +154,14 @@ export async function POST(req: NextRequest) {
     .eq("processado", false);
 
   revalidateTag("pedidos");
+
+  if (identifier && updates.status) {
+    await broadcastStatusPedido(sb, identifier, {
+      status: updates.status as string,
+      paid_at: (updates.paid_at as string | undefined) ?? null,
+      gateway_status: (updates.gateway_status as string | undefined) ?? null,
+    });
+  }
 
   return NextResponse.json({ ok: true });
 }

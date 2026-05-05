@@ -8,6 +8,7 @@ import { createSupabaseAdmin } from "@/lib/supabase/admin";
 import { fmtPreco } from "@/lib/utils";
 import { obterWhatsappSuporte } from "@/lib/config-app";
 import { gerarQrCodeDataUrl } from "@/lib/pagamento/qrcode";
+import { pedidoStatusEhPosPagamento } from "@/lib/pedido-status";
 import { CopiarNumero } from "./copiar-numero";
 import { PixPagamento } from "./pix-pagamento";
 
@@ -54,7 +55,7 @@ export default async function PedidoPage({ params }: { params: Promise<Params> }
   const endereco = pedido.endereco as Record<string, string>;
   const previsao = new Date(new Date(pedido.criado_em as string).getTime() + 40 * 60 * 1000)
     .toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
-  const jaPago = pedido.status === "pago" || pedido.status === "concluido";
+  const jaPago = pedidoStatusEhPosPagamento(pedido.status as string);
 
   const qrCodeTexto = (pedido.pix_qr_code as string | null) ?? null;
   const imagemSalva = (pedido.pix_qr_image as string | null) ?? null;

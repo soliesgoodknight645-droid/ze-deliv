@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { createSupabaseAdmin } from "@/lib/supabase/admin";
+import { pedidoStatusEhPosPagamento } from "@/lib/pedido-status";
+import { broadcastStatusPedido } from "@/lib/realtime-pedido";
 import { consultarStatusPedido, type GatewayId } from "@/lib/pagamento/gateway";
 
 export const dynamic = "force-dynamic";
@@ -29,7 +31,15 @@ export async function GET(_req: Request, { params }: { params: Promise<Params> }
     return json({ erro: "pedido nao encontrado" }, 404);
   }
 
-  if (pedido.status === "pago" || pedido.status === "concluido") {
+  if (pedidoStatusEhPosPagamento(pedido.status as string)) {
+    return json({
+      status: pedido.status,
+      gatewayStatus: pedido.gateway_status,
+      paidAt: pedido.paid_at,
+    });
+  }
+
+  if (pedido.status === "cancelado") {
     return json({
       status: pedido.status,
       gatewayStatus: pedido.gateway_status,
@@ -57,6 +67,12 @@ export async function GET(_req: Request, { params }: { params: Promise<Params> }
           updates.paid_at = new Date().toISOString();
         }
         await sb.from("pedidos").update(updates).eq("id", pedido.id);
+        // Aviso instantaneo pra outras abas (ex.: outro browser do cliente).
+        await broadcastStatusPedido(sb, numero, {
+          status: r.statusInterno,
+          paid_at: (updates.paid_at as string | undefined) ?? pedido.paid_at,
+          gateway_status: r.gatewayStatus,
+        });
         return json({
           status: r.statusInterno,
           gatewayStatus: r.gatewayStatus,

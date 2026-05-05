@@ -4,6 +4,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Copy, MessageCircle, RefreshCcw } from "lucide-react";
 import { toast } from "sonner";
 import { linkWhatsApp } from "@/lib/utils";
+import { pedidoStatusEhPosPagamento } from "@/lib/pedido-status";
+import { createSupabaseBrowser } from "@/lib/supabase/client";
+import { canalPedido, type PedidoStatusBroadcast } from "@/lib/realtime-pedido-shared";
 import { PagamentoConfirmado } from "./pagamento-confirmado";
 import type { DadosClienteUpsell } from "@/contexts/UpsellContext";
 
@@ -18,6 +21,7 @@ type Props = {
 };
 
 const CHAVE_ROLETA_VISTA = (numero: string) => `ze:roleta-vista:${numero}`;
+const POLL_INTERVALO_MS = 2000;
 
 export function PixPagamento({
   numero,
@@ -32,6 +36,7 @@ export function PixPagamento({
   const [paidAt, setPaidAt] = useState<string | null>(initialPaidAt ?? null);
   const [verificando, setVerificando] = useState(false);
   const [roletaAberta, setRoletaAberta] = useState(false);
+  const [ultimaVerificacao, setUltimaVerificacao] = useState<number | null>(null);
 
   /** Sempre reflete o ultimo status (evita closure stale no polling). */
   const statusRef = useRef(initialStatus);
@@ -42,12 +47,15 @@ export function PixPagamento({
   const roletaTimeoutRef = useRef<number | null>(null);
   /** Descarta respostas antigas de polls sobrepostos ou fora de ordem. */
   const verificarGenRef = useRef(0);
+  /** Evita toast duplicado se varias verificacoes detectam o mesmo salto. */
+  const toastConfirmacaoPosPagamentoRef = useRef(false);
 
-  const pago = status === "pago" || status === "concluido";
+  const pago = pedidoStatusEhPosPagamento(status);
 
   useEffect(() => {
     roletaJaAgendadaRef.current = false;
     verificarGenRef.current = 0;
+    toastConfirmacaoPosPagamentoRef.current = false;
   }, [numero]);
 
   useEffect(() => {
@@ -77,6 +85,31 @@ export function PixPagamento({
     }, 900) as unknown as number;
   }, [numero]);
 
+  /**
+   * Aplica um status novo vindo de qualquer fonte (polling ou broadcast).
+   * Centralizar aqui evita divergencia entre os caminhos.
+   */
+  const aplicarStatus = useCallback(
+    (novo: string, paidAtNovo?: string | null) => {
+      if (paidAtNovo) setPaidAt(paidAtNovo);
+      const prev = statusRef.current;
+      if (novo === prev) return;
+      const eraPago = pedidoStatusEhPosPagamento(prev);
+      const novoEPositivo = pedidoStatusEhPosPagamento(novo);
+      // Resposta atrasada nao pode "desmarcar" um pagamento ja detectado.
+      if (eraPago && !novoEPositivo) return;
+      setStatus(novo);
+      if (!eraPago && novoEPositivo) {
+        if (!toastConfirmacaoPosPagamentoRef.current) {
+          toastConfirmacaoPosPagamentoRef.current = true;
+          toast.success("Pagamento confirmado!");
+        }
+        agendarRoleta();
+      }
+    },
+    [agendarRoleta],
+  );
+
   const verificar = useCallback(async () => {
     const gen = ++verificarGenRef.current;
     setVerificando(true);
@@ -90,53 +123,62 @@ export function PixPagamento({
       if (gen !== verificarGenRef.current) return;
       if (!r.ok || j.erro) return;
       if (!j.status || typeof j.status !== "string") return;
-
-      if (j.paidAt) setPaidAt(j.paidAt);
-
-      const prev = statusRef.current;
-      const novo = j.status;
-      if (novo === prev) return;
-
-      // Resposta atrasada não pode "desmarcar" um pagamento já detectado.
-      const jaEraPago = prev === "pago" || prev === "concluido";
-      const novoEPositivo = novo === "pago" || novo === "concluido";
-      if (jaEraPago && !novoEPositivo) return;
-
-      const eraPago = jaEraPago;
-      setStatus(novo);
-
-      if (!eraPago && novo === "pago") toast.success("Pagamento confirmado!");
-      if (!eraPago && (novo === "pago" || novo === "concluido")) agendarRoleta();
+      setUltimaVerificacao(Date.now());
+      aplicarStatus(j.status, j.paidAt ?? null);
     } catch {
       if (gen === verificarGenRef.current) toast.error("Erro ao verificar pagamento");
     } finally {
       if (gen === verificarGenRef.current) setVerificando(false);
     }
-  }, [numero, agendarRoleta]);
+  }, [numero, aplicarStatus]);
 
-  // Consulta imediata + a cada 3s enquanto nao pago.
+  // Polling a cada 2s enquanto nao pago.
   useEffect(() => {
     if (pago) return;
     void verificar();
-    const id = window.setInterval(() => void verificar(), 3000);
+    const id = window.setInterval(() => void verificar(), POLL_INTERVALO_MS);
     return () => window.clearInterval(id);
-  }, [pago, numero, verificar]);
+  }, [pago, verificar]);
 
-  // Ao voltar pra aba, conferir na hora (intervalo costuma ser atrasado em background).
+  // Ao voltar pra aba / focar a janela, conferir na hora.
   useEffect(() => {
     if (pago) return;
     const onVis = () => {
       if (document.visibilityState === "visible") void verificar();
     };
+    const onFocus = () => void verificar();
     document.addEventListener("visibilitychange", onVis);
-    return () => document.removeEventListener("visibilitychange", onVis);
+    window.addEventListener("focus", onFocus);
+    window.addEventListener("pageshow", onFocus);
+    return () => {
+      document.removeEventListener("visibilitychange", onVis);
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("pageshow", onFocus);
+    };
   }, [pago, verificar]);
+
+  // Realtime: aviso instantaneo via Supabase broadcast (independe do polling).
+  useEffect(() => {
+    if (pago) return;
+    const sb = createSupabaseBrowser();
+    const ch = sb.channel(canalPedido(numero), {
+      config: { broadcast: { self: false } },
+    });
+    ch.on("broadcast", { event: "status" }, ({ payload }) => {
+      const p = (payload ?? {}) as Partial<PedidoStatusBroadcast>;
+      if (typeof p.status !== "string") return;
+      aplicarStatus(p.status, typeof p.paid_at === "string" ? p.paid_at : null);
+    }).subscribe();
+    return () => {
+      void sb.removeChannel(ch);
+    };
+  }, [numero, pago, aplicarStatus]);
 
   // Pagina ja abre pago (F5): o polling nao roda — agenda a roleta aqui.
   useEffect(() => {
     if (!pago) return;
     agendarRoleta();
-  }, [pago, numero, agendarRoleta]);
+  }, [pago, agendarRoleta]);
 
   const fecharRoleta = () => {
     setRoletaAberta(false);
@@ -175,6 +217,14 @@ export function PixPagamento({
       toast.error("Erro ao copiar");
     }
   }
+
+  const ultimaVerificacaoTxt = ultimaVerificacao
+    ? new Date(ultimaVerificacao).toLocaleTimeString("pt-BR", {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      })
+    : "—";
 
   return (
     <div className="bg-white rounded-2xl shadow-sm p-5 mb-4">
@@ -219,7 +269,7 @@ export function PixPagamento({
       </button>
 
       <p className="text-[11px] text-gray-400 text-center mt-3">
-        Verificamos automaticamente a cada 3 segundos.
+        Verificamos automaticamente a cada {POLL_INTERVALO_MS / 1000}s · última às {ultimaVerificacaoTxt}
       </p>
 
       <div className="mt-5 pt-4 border-t border-gray-100">
