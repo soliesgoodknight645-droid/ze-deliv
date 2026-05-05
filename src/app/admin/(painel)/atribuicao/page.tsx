@@ -1,0 +1,532 @@
+import Link from "next/link";
+import {
+  BarChart3,
+  CreditCard,
+  Gauge,
+  MousePointerClick,
+  Search,
+  ShoppingBag,
+  TrendingUp,
+  Users,
+} from "lucide-react";
+import { createSupabaseAdmin } from "@/lib/supabase/admin";
+import { fmtPreco, fmtTelefone } from "@/lib/utils";
+import { DashboardClient, type LinhaPedidoDashboard, type Ranking } from "./dashboard-client";
+
+export const dynamic = "force-dynamic";
+export const metadata = { title: "Admin · Atribuição — Zé Chegou 24h", robots: { index: false } };
+
+type StatusFiltro = "todos" | "leads" | "pagos" | "cancelados" | "criados";
+
+type SearchParamsAtrib = {
+  de?: string;
+  ate?: string;
+  status?: StatusFiltro;
+  source?: string;
+  medium?: string;
+  campaign?: string;
+  q?: string;
+};
+
+const STATUS_OPCOES: { id: StatusFiltro; label: string }[] = [
+  { id: "todos", label: "Todos" },
+  { id: "leads", label: "Leads (qualquer status)" },
+  { id: "criados", label: "Pedidos criados" },
+  { id: "pagos", label: "Pedidos pagos" },
+  { id: "cancelados", label: "Cancelados" },
+];
+
+const PERIODOS_RAPIDOS: { id: string; label: string; dias: number }[] = [
+  { id: "7", label: "7 dias", dias: 7 },
+  { id: "30", label: "30 dias", dias: 30 },
+  { id: "90", label: "90 dias", dias: 90 },
+];
+
+const STATUS_LABEL: Record<string, { texto: string; cor: string }> = {
+  aguardando_pagamento: { texto: "Aguardando", cor: "bg-yellow-100 text-yellow-700" },
+  pago: { texto: "Pago", cor: "bg-green-100 text-green-700" },
+  em_separacao: { texto: "Separação", cor: "bg-blue-100 text-blue-700" },
+  em_entrega: { texto: "Entrega", cor: "bg-orange-100 text-orange-700" },
+  concluido: { texto: "Concluído", cor: "bg-gray-200 text-gray-700" },
+  cancelado: { texto: "Cancelado", cor: "bg-red-100 text-red-700" },
+};
+
+function dataIsoMenosDias(dias: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() - dias);
+  d.setHours(0, 0, 0, 0);
+  return d.toISOString();
+}
+
+function rotuloOuOrganic(v: string | null | undefined): string {
+  if (!v || !v.trim()) return "(orgânico/direto)";
+  return v;
+}
+
+function rankear(
+  pedidos: PedidoComItens[],
+  campo: keyof Pick<
+    PedidoBase,
+    "traffic_source" | "traffic_medium" | "traffic_campaign" | "traffic_adgroup" | "traffic_keyword" | "traffic_searchterm" | "traffic_device"
+  >,
+  comb?: boolean,
+): Ranking[] {
+  const mapa = new Map<string, Ranking>();
+  for (const p of pedidos) {
+    const v = comb
+      ? `${rotuloOuOrganic(p.traffic_source as string | null)} / ${rotuloOuOrganic(p.traffic_medium as string | null)}`
+      : rotuloOuOrganic(p[campo] as string | null);
+    const total = Number(p.total ?? 0);
+    const pago = p.status === "pago" || p.status === "concluido" || p.status === "em_separacao" || p.status === "em_entrega";
+    if (!mapa.has(v)) {
+      mapa.set(v, { chave: v, leads: 0, pedidos: 0, faturamento: 0 });
+    }
+    const r = mapa.get(v)!;
+    r.leads += 1;
+    if (pago) {
+      r.pedidos += 1;
+      r.faturamento += total;
+    }
+  }
+  return Array.from(mapa.values()).sort((a, b) => b.faturamento - a.faturamento || b.leads - a.leads);
+}
+
+type PedidoBase = {
+  id: string;
+  numero: string;
+  status: string;
+  total: number | string;
+  cliente_nome: string;
+  cliente_telefone: string;
+  criado_em: string;
+  paid_at: string | null;
+  traffic_source: string | null;
+  traffic_medium: string | null;
+  traffic_campaign: string | null;
+  traffic_adgroup: string | null;
+  traffic_keyword: string | null;
+  traffic_searchterm: string | null;
+  traffic_matchtype: string | null;
+  traffic_device: string | null;
+  traffic_creative: string | null;
+  traffic_gclid: string | null;
+  traffic_landing_page: string | null;
+  traffic_referrer: string | null;
+  first_visit_at: string | null;
+  conversion_at: string | null;
+};
+
+type PedidoComItens = PedidoBase & {
+  itens_pedido: { produto_nome: string; quantidade: number }[] | null;
+};
+
+export default async function DashboardAtribuicaoPage({
+  searchParams,
+}: {
+  searchParams?: SearchParamsAtrib;
+}) {
+  const admin = createSupabaseAdmin();
+
+  const hojeIso = new Date().toISOString();
+  const de = searchParams?.de ?? dataIsoMenosDias(30).slice(0, 10);
+  const ate = searchParams?.ate ?? hojeIso.slice(0, 10);
+  const status = (searchParams?.status as StatusFiltro) ?? "todos";
+  const sourceF = searchParams?.source?.trim() ?? "";
+  const mediumF = searchParams?.medium?.trim() ?? "";
+  const campaignF = searchParams?.campaign?.trim() ?? "";
+  const q = searchParams?.q?.trim() ?? "";
+
+  const deDate = new Date(`${de}T00:00:00.000-03:00`);
+  const ateDate = new Date(`${ate}T23:59:59.999-03:00`);
+
+  let query = admin
+    .from("pedidos")
+    .select(
+      `id, numero, status, total, cliente_nome, cliente_telefone, criado_em, paid_at,
+       traffic_source, traffic_medium, traffic_campaign, traffic_adgroup,
+       traffic_keyword, traffic_searchterm, traffic_matchtype, traffic_device,
+       traffic_creative, traffic_gclid, traffic_landing_page, traffic_referrer,
+       first_visit_at, conversion_at,
+       itens_pedido(produto_nome, quantidade)`,
+    )
+    .gte("criado_em", deDate.toISOString())
+    .lte("criado_em", ateDate.toISOString())
+    .order("criado_em", { ascending: false })
+    .limit(2000);
+
+  if (status === "pagos") query = query.in("status", ["pago", "em_separacao", "em_entrega", "concluido"]);
+  if (status === "cancelados") query = query.eq("status", "cancelado");
+  if (status === "criados") query = query.neq("status", "cancelado");
+  if (status === "leads") {
+    /* todos com algum dado de atribuição */
+  }
+
+  if (sourceF) query = query.ilike("traffic_source", `%${sourceF}%`);
+  if (mediumF) query = query.ilike("traffic_medium", `%${mediumF}%`);
+  if (campaignF) query = query.ilike("traffic_campaign", `%${campaignF}%`);
+  if (q) {
+    query = query.or(
+      `numero.ilike.%${q}%,cliente_nome.ilike.%${q}%,cliente_telefone.ilike.%${q}%,traffic_keyword.ilike.%${q}%,traffic_searchterm.ilike.%${q}%`,
+    );
+  }
+
+  const { data: pedidosRaw, error } = await query;
+  const pedidos = (pedidosRaw ?? []) as unknown as PedidoComItens[];
+
+  // ===== KPIs =====
+  const totalLeads = pedidos.length;
+  const pagos = pedidos.filter(
+    (p) => p.status === "pago" || p.status === "em_separacao" || p.status === "em_entrega" || p.status === "concluido",
+  );
+  const totalPagos = pagos.length;
+  const faturamento = pagos.reduce((s, p) => s + Number(p.total ?? 0), 0);
+  const ticketMedio = totalPagos > 0 ? faturamento / totalPagos : 0;
+  const taxaConversao = totalLeads > 0 ? (totalPagos / totalLeads) * 100 : 0;
+
+  // ===== Rankings =====
+  const rankCampanha = rankear(pedidos, "traffic_campaign").slice(0, 15);
+  const rankAdgroup = rankear(pedidos, "traffic_adgroup").slice(0, 15);
+  const rankKeyword = rankear(pedidos, "traffic_keyword").slice(0, 15);
+  const rankSearchterm = rankear(pedidos, "traffic_searchterm").slice(0, 15);
+  const rankSourceMedium = rankear(pedidos, "traffic_source", true).slice(0, 15);
+  const rankDevice = rankear(pedidos, "traffic_device").slice(0, 10);
+
+  // ===== Faturamento por dia (gráfico) =====
+  type Dia = { data: string; leads: number; pagos: number; faturamento: number };
+  const porDia = new Map<string, Dia>();
+  // pré-popular faixa para dias zerados aparecerem no gráfico
+  const totalDias = Math.max(
+    1,
+    Math.ceil((ateDate.getTime() - deDate.getTime()) / (24 * 60 * 60 * 1000)),
+  );
+  for (let i = 0; i <= totalDias; i++) {
+    const d = new Date(deDate);
+    d.setDate(d.getDate() + i);
+    const k = d.toISOString().slice(0, 10);
+    porDia.set(k, { data: k, leads: 0, pagos: 0, faturamento: 0 });
+  }
+  for (const p of pedidos) {
+    const k = (p.criado_em as string).slice(0, 10);
+    if (!porDia.has(k)) {
+      porDia.set(k, { data: k, leads: 0, pagos: 0, faturamento: 0 });
+    }
+    const dia = porDia.get(k)!;
+    dia.leads += 1;
+    if (
+      p.status === "pago" ||
+      p.status === "em_separacao" ||
+      p.status === "em_entrega" ||
+      p.status === "concluido"
+    ) {
+      dia.pagos += 1;
+      dia.faturamento += Number(p.total ?? 0);
+    }
+  }
+  const seriePorDia = Array.from(porDia.values()).sort((a, b) =>
+    a.data.localeCompare(b.data),
+  );
+
+  // ===== Linhas para a tabela detalhada =====
+  const linhas: LinhaPedidoDashboard[] = pedidos.map((p) => {
+    const itens = p.itens_pedido ?? [];
+    const produto =
+      itens.length === 0
+        ? "—"
+        : itens.length === 1
+          ? `${itens[0].quantidade}× ${itens[0].produto_nome}`
+          : `${itens[0].quantidade}× ${itens[0].produto_nome} (+${itens.length - 1})`;
+    const meta = STATUS_LABEL[p.status] ?? { texto: p.status, cor: "bg-gray-100 text-gray-700" };
+    return {
+      id: p.id,
+      numero: p.numero,
+      cliente: p.cliente_nome,
+      telefone: fmtTelefone(p.cliente_telefone),
+      produto,
+      total: Number(p.total ?? 0),
+      status: p.status,
+      statusLabel: meta.texto,
+      statusCor: meta.cor,
+      criadoEm: p.criado_em,
+      paidAt: p.paid_at,
+      source: p.traffic_source,
+      medium: p.traffic_medium,
+      campaign: p.traffic_campaign,
+      adgroup: p.traffic_adgroup,
+      keyword: p.traffic_keyword,
+      searchterm: p.traffic_searchterm,
+      matchtype: p.traffic_matchtype,
+      device: p.traffic_device,
+      gclid: p.traffic_gclid,
+      firstVisitAt: p.first_visit_at,
+    };
+  });
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-5">
+        <div>
+          <h1 className="font-extrabold text-2xl text-brand-dark inline-flex items-center gap-2">
+            <BarChart3 className="w-6 h-6 text-brand-yellow" />
+            Dashboard de Atribuição
+          </h1>
+          <p className="text-sm text-gray-500">
+            Rastreamento nativo de tráfego pago e orgânico — first-click attribution.
+          </p>
+        </div>
+      </div>
+
+      {/* ===== Filtros ===== */}
+      <form
+        action="/admin/atribuicao"
+        method="get"
+        className="bg-white rounded-2xl p-4 mb-5 shadow-sm grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3"
+      >
+        <Campo rotulo="De">
+          <input
+            type="date"
+            name="de"
+            defaultValue={de}
+            className="w-full h-10 px-3 rounded-lg border border-gray-200 bg-gray-50 text-sm focus:outline-none focus:ring-2 focus:ring-brand-yellow"
+          />
+        </Campo>
+        <Campo rotulo="Até">
+          <input
+            type="date"
+            name="ate"
+            defaultValue={ate}
+            className="w-full h-10 px-3 rounded-lg border border-gray-200 bg-gray-50 text-sm focus:outline-none focus:ring-2 focus:ring-brand-yellow"
+          />
+        </Campo>
+        <Campo rotulo="Status">
+          <select
+            name="status"
+            defaultValue={status}
+            className="w-full h-10 px-3 rounded-lg border border-gray-200 bg-gray-50 text-sm focus:outline-none focus:ring-2 focus:ring-brand-yellow"
+          >
+            {STATUS_OPCOES.map((o) => (
+              <option key={o.id} value={o.id}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </Campo>
+        <Campo rotulo="Source">
+          <input
+            name="source"
+            defaultValue={sourceF}
+            placeholder="google, facebook…"
+            className="w-full h-10 px-3 rounded-lg border border-gray-200 bg-gray-50 text-sm focus:outline-none focus:ring-2 focus:ring-brand-yellow"
+          />
+        </Campo>
+        <Campo rotulo="Medium">
+          <input
+            name="medium"
+            defaultValue={mediumF}
+            placeholder="cpc, organic…"
+            className="w-full h-10 px-3 rounded-lg border border-gray-200 bg-gray-50 text-sm focus:outline-none focus:ring-2 focus:ring-brand-yellow"
+          />
+        </Campo>
+        <Campo rotulo="Campanha">
+          <input
+            name="campaign"
+            defaultValue={campaignF}
+            placeholder="ex: Cervejas-SP"
+            className="w-full h-10 px-3 rounded-lg border border-gray-200 bg-gray-50 text-sm focus:outline-none focus:ring-2 focus:ring-brand-yellow"
+          />
+        </Campo>
+        <Campo rotulo="Buscar (cliente, telefone, palavra-chave, número)" full>
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+            <input
+              name="q"
+              defaultValue={q}
+              placeholder="Buscar…"
+              className="w-full h-10 pl-9 pr-3 rounded-lg border border-gray-200 bg-gray-50 text-sm focus:outline-none focus:ring-2 focus:ring-brand-yellow"
+            />
+          </div>
+        </Campo>
+        <div className="col-span-2 sm:col-span-3 lg:col-span-6 flex flex-wrap gap-2 items-center justify-between">
+          <div className="flex items-center gap-1.5 text-xs">
+            <span className="text-gray-400">Período:</span>
+            {PERIODOS_RAPIDOS.map((p) => (
+              <Link
+                key={p.id}
+                href={`/admin/atribuicao?de=${dataIsoMenosDias(p.dias).slice(0, 10)}&ate=${hojeIso.slice(0, 10)}${status !== "todos" ? `&status=${status}` : ""}`}
+                className="px-2.5 h-7 rounded-full font-bold inline-flex items-center bg-gray-100 text-gray-600 hover:bg-gray-200"
+              >
+                {p.label}
+              </Link>
+            ))}
+          </div>
+          <div className="flex gap-2">
+            <Link
+              href="/admin/atribuicao"
+              className="h-10 px-4 rounded-lg text-xs font-bold border border-gray-200 text-gray-600 hover:bg-gray-50 inline-flex items-center"
+            >
+              Limpar
+            </Link>
+            <button
+              type="submit"
+              className="h-10 px-5 rounded-lg text-xs font-bold bg-brand-yellow text-brand-dark active:scale-95 inline-flex items-center"
+            >
+              Aplicar filtros
+            </button>
+          </div>
+        </div>
+      </form>
+
+      {error && (
+        <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl p-4 text-sm mb-4">
+          Erro ao carregar dados: {error.message}
+        </div>
+      )}
+
+      {/* ===== KPIs ===== */}
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-5">
+        <Kpi
+          rotulo="Total de leads"
+          valor={totalLeads.toLocaleString("pt-BR")}
+          Icon={Users}
+          accent="bg-blue-100 text-blue-700"
+        />
+        <Kpi
+          rotulo="Pedidos pagos"
+          valor={totalPagos.toLocaleString("pt-BR")}
+          Icon={ShoppingBag}
+          accent="bg-green-100 text-green-700"
+        />
+        <Kpi
+          rotulo="Faturamento"
+          valor={fmtPreco(faturamento)}
+          Icon={CreditCard}
+          accent="bg-yellow-100 text-yellow-700"
+        />
+        <Kpi
+          rotulo="Ticket médio"
+          valor={fmtPreco(ticketMedio)}
+          Icon={TrendingUp}
+          accent="bg-purple-100 text-purple-700"
+        />
+        <Kpi
+          rotulo="Conversão"
+          valor={`${taxaConversao.toFixed(1)}%`}
+          Icon={Gauge}
+          accent="bg-orange-100 text-orange-700"
+        />
+      </div>
+
+      {/* ===== Gráfico + Source/Medium ===== */}
+      <div className="grid lg:grid-cols-3 gap-4 mb-5">
+        <div className="bg-white rounded-2xl p-5 shadow-sm lg:col-span-2">
+          <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3 inline-flex items-center gap-1.5">
+            <TrendingUp className="w-3.5 h-3.5" /> Faturamento e leads por dia
+          </h3>
+          <DashboardClient kind="grafico" serie={seriePorDia} />
+        </div>
+        <RankingCard titulo="Source / Medium" rankings={rankSourceMedium} Icon={MousePointerClick} />
+      </div>
+
+      {/* ===== Rankings ===== */}
+      <div className="grid lg:grid-cols-2 gap-4 mb-5">
+        <RankingCard titulo="Campanhas" rankings={rankCampanha} Icon={MousePointerClick} />
+        <RankingCard titulo="Grupos de anúncios" rankings={rankAdgroup} Icon={MousePointerClick} />
+        <RankingCard titulo="Palavras-chave" rankings={rankKeyword} Icon={MousePointerClick} />
+        <RankingCard titulo="Termos pesquisados pelo usuário" rankings={rankSearchterm} Icon={Search} />
+        <RankingCard titulo="Dispositivo" rankings={rankDevice} Icon={MousePointerClick} />
+      </div>
+
+      {/* ===== Tabela detalhada (client com sort) ===== */}
+      <div className="bg-white rounded-2xl shadow-sm overflow-hidden">
+        <div className="px-5 pt-5 pb-3 flex items-center justify-between">
+          <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider inline-flex items-center gap-1.5">
+            <Users className="w-3.5 h-3.5" /> Pedidos detalhados
+          </h3>
+          <span className="text-xs text-gray-400">
+            {linhas.length.toLocaleString("pt-BR")} registro{linhas.length === 1 ? "" : "s"}
+          </span>
+        </div>
+        <DashboardClient kind="tabela" linhas={linhas} />
+      </div>
+    </div>
+  );
+}
+
+function Campo({ rotulo, full, children }: { rotulo: string; full?: boolean; children: React.ReactNode }) {
+  return (
+    <label className={`flex flex-col gap-1 ${full ? "col-span-2 sm:col-span-3 lg:col-span-6" : ""}`}>
+      <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400">{rotulo}</span>
+      {children}
+    </label>
+  );
+}
+
+function Kpi({
+  rotulo,
+  valor,
+  Icon,
+  accent,
+}: {
+  rotulo: string;
+  valor: string;
+  Icon: typeof Users;
+  accent: string;
+}) {
+  return (
+    <div className="bg-white rounded-2xl p-4 shadow-sm">
+      <div className={`w-9 h-9 rounded-xl inline-flex items-center justify-center mb-2 ${accent}`}>
+        <Icon className="w-4 h-4" />
+      </div>
+      <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">{rotulo}</p>
+      <p className="text-xl font-extrabold text-brand-dark mt-0.5">{valor}</p>
+    </div>
+  );
+}
+
+function RankingCard({
+  titulo,
+  rankings,
+  Icon,
+}: {
+  titulo: string;
+  rankings: Ranking[];
+  Icon: typeof Users;
+}) {
+  const max = rankings[0]?.faturamento ?? 0;
+  return (
+    <div className="bg-white rounded-2xl p-5 shadow-sm">
+      <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3 inline-flex items-center gap-1.5">
+        <Icon className="w-3.5 h-3.5" /> {titulo}
+      </h3>
+      {rankings.length === 0 ? (
+        <p className="text-sm text-gray-400 text-center py-6">Sem dados no período.</p>
+      ) : (
+        <ul className="space-y-2.5">
+          {rankings.map((r) => {
+            const pct = max > 0 ? (r.faturamento / max) * 100 : 0;
+            return (
+              <li key={r.chave}>
+                <div className="flex items-center justify-between gap-2 text-xs mb-1">
+                  <span className="font-semibold text-brand-dark truncate flex-1" title={r.chave}>
+                    {r.chave}
+                  </span>
+                  <span className="text-gray-500 flex-shrink-0">
+                    {r.pedidos} ped · {r.leads} leads
+                  </span>
+                  <span className="font-extrabold text-brand-dark flex-shrink-0 min-w-[80px] text-right">
+                    {fmtPreco(r.faturamento)}
+                  </span>
+                </div>
+                <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-brand-yellow rounded-full"
+                    style={{ width: `${Math.max(2, pct)}%` }}
+                  />
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}

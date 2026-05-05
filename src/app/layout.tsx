@@ -8,6 +8,7 @@ import { CartSheet } from "@/components/CartSheet";
 import { FloatingCartBar } from "@/components/FloatingCartBar";
 import { AgeGate } from "@/components/AgeGate";
 import { UtmifyScripts } from "@/components/UtmifyScripts";
+import { AttributionTracker } from "@/components/AttributionTracker";
 import "./globals.css";
 
 const fontSans = Inter({ subsets: ["latin"], variable: "--font-sans", display: "swap" });
@@ -38,6 +39,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body className="font-sans bg-white text-brand-dark min-h-screen">
         <CartProvider>
           <UpsellProvider>
+            <AttributionTracker />
             <AgeGate />
             <div className="min-h-screen flex flex-col">{children}</div>
             <FloatingCartBar />

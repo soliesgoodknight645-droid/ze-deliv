@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import { CreditCard, LayoutGrid, LogOut, Package, Settings, ShieldCheck, ShoppingBag, UserCircle } from "lucide-react";
+import { BarChart3, CreditCard, LayoutGrid, LogOut, Package, Settings, ShieldCheck, ShoppingBag, UserCircle } from "lucide-react";
 import { createSupabaseServer } from "@/lib/supabase/server";
 import { createSupabaseAdmin } from "@/lib/supabase/admin";
 import { logout } from "../actions";
@@ -42,6 +42,12 @@ export default async function AdminPainelLayout({ children }: { children: React.
               className="inline-flex items-center gap-1.5 px-3 h-9 rounded-lg text-xs font-bold hover:bg-white/10"
             >
               <Package className="w-3.5 h-3.5" /> Pedidos
+            </Link>
+            <Link
+              href="/admin/atribuicao"
+              className="inline-flex items-center gap-1.5 px-3 h-9 rounded-lg text-xs font-bold hover:bg-white/10"
+            >
+              <BarChart3 className="w-3.5 h-3.5" /> Atribuição
             </Link>
             <Link
               href="/admin/produtos"

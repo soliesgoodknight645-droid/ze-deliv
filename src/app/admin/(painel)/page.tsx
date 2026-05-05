@@ -1,5 +1,13 @@
 import Link from "next/link";
-import { ChevronRight, Filter } from "lucide-react";
+import {
+  BarChart3,
+  ChevronRight,
+  CreditCard,
+  Filter,
+  LayoutGrid,
+  ShoppingBag,
+  TrendingUp,
+} from "lucide-react";
 import { createSupabaseAdmin } from "@/lib/supabase/admin";
 import { fmtPreco, fmtTelefone } from "@/lib/utils";
 
@@ -14,6 +22,8 @@ const STATUS_LABEL: Record<string, { texto: string; cor: string }> = {
   concluido: { texto: "Concluído", cor: "bg-gray-200 text-gray-700" },
   cancelado: { texto: "Cancelado", cor: "bg-red-100 text-red-700" },
 };
+
+const STATUS_PAGOS = ["pago", "em_separacao", "em_entrega", "concluido"] as const;
 
 type Filtro = "todos" | "aguardando" | "ativos" | "concluidos";
 
@@ -42,6 +52,70 @@ export default async function AdminPedidosPage({
 
   const { data: pedidos, error } = await query;
 
+  // ===== Resumo dos últimos 30 dias (KPIs + faturamento por categoria) =====
+  const desdeIso = (() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 30);
+    d.setHours(0, 0, 0, 0);
+    return d.toISOString();
+  })();
+
+  const [{ data: pedidos30 }, { data: catList }] = await Promise.all([
+    admin
+      .from("pedidos")
+      .select(
+        `id, status, total, criado_em,
+         itens_pedido(quantidade, preco_unitario, produto_id,
+           produtos(categoria_id))`,
+      )
+      .gte("criado_em", desdeIso)
+      .limit(2000),
+    admin.from("categorias").select("id, nome").order("ordem", { ascending: true }),
+  ]);
+
+  const pedidos30arr = (pedidos30 ?? []) as Array<{
+    id: string;
+    status: string;
+    total: number | string;
+    criado_em: string;
+    itens_pedido:
+      | Array<{
+          quantidade: number;
+          preco_unitario: number | string;
+          produto_id: string;
+          produtos: { categoria_id: string } | { categoria_id: string }[] | null;
+        }>
+      | null;
+  }>;
+
+  const ehPago = (s: string) => (STATUS_PAGOS as readonly string[]).includes(s);
+
+  const totalPagos30 = pedidos30arr.filter((p) => ehPago(p.status)).length;
+  const faturamento30 = pedidos30arr
+    .filter((p) => ehPago(p.status))
+    .reduce((s, p) => s + Number(p.total ?? 0), 0);
+  const ticketMedio30 = totalPagos30 > 0 ? faturamento30 / totalPagos30 : 0;
+
+  const catNome = new Map((catList ?? []).map((c) => [c.id as string, c.nome as string]));
+  const fatPorCategoria = new Map<string, number>();
+  for (const p of pedidos30arr) {
+    if (!ehPago(p.status)) continue;
+    for (const it of p.itens_pedido ?? []) {
+      const prod = Array.isArray(it.produtos) ? it.produtos[0] : it.produtos;
+      const catId = prod?.categoria_id ?? "sem_categoria";
+      const valor = Number(it.preco_unitario) * Number(it.quantidade);
+      fatPorCategoria.set(catId, (fatPorCategoria.get(catId) ?? 0) + valor);
+    }
+  }
+  const rankCategorias = Array.from(fatPorCategoria.entries())
+    .map(([catId, valor]) => ({
+      catId,
+      nome: catNome.get(catId) ?? "Sem categoria",
+      valor,
+    }))
+    .sort((a, b) => b.valor - a.valor);
+  const totalCategoria = rankCategorias.reduce((s, r) => s + r.valor, 0);
+
   return (
     <div>
       <div className="flex items-center justify-between mb-5">
@@ -49,6 +123,76 @@ export default async function AdminPedidosPage({
           <h1 className="font-extrabold text-2xl text-brand-dark">Pedidos</h1>
           <p className="text-sm text-gray-500">Gerencie pagamentos e entregas em andamento.</p>
         </div>
+        <Link
+          href="/admin/atribuicao"
+          className="hidden sm:inline-flex items-center gap-1.5 h-9 px-3 rounded-lg text-xs font-bold bg-brand-dark text-white hover:bg-black/80"
+        >
+          <BarChart3 className="w-3.5 h-3.5" /> Dashboard de atribuição
+        </Link>
+      </div>
+
+      {/* ===== KPIs últimos 30 dias ===== */}
+      <div className="grid grid-cols-3 gap-3 mb-4">
+        <KpiSimples
+          rotulo="Pedidos pagos (30d)"
+          valor={totalPagos30.toLocaleString("pt-BR")}
+          Icon={ShoppingBag}
+          accent="bg-green-100 text-green-700"
+        />
+        <KpiSimples
+          rotulo="Faturamento (30d)"
+          valor={fmtPreco(faturamento30)}
+          Icon={CreditCard}
+          accent="bg-yellow-100 text-yellow-700"
+        />
+        <KpiSimples
+          rotulo="Ticket médio (30d)"
+          valor={fmtPreco(ticketMedio30)}
+          Icon={TrendingUp}
+          accent="bg-purple-100 text-purple-700"
+        />
+      </div>
+
+      {/* ===== Faturamento por categoria ===== */}
+      <div className="bg-white rounded-2xl p-5 shadow-sm mb-5">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider inline-flex items-center gap-1.5">
+            <LayoutGrid className="w-3.5 h-3.5" /> Faturamento por categoria · últimos 30 dias
+          </h3>
+          {totalCategoria > 0 && (
+            <span className="text-xs text-gray-500">
+              Total: <strong className="text-brand-dark">{fmtPreco(totalCategoria)}</strong>
+            </span>
+          )}
+        </div>
+        {rankCategorias.length === 0 ? (
+          <p className="text-sm text-gray-400 text-center py-6">
+            Sem pedidos pagos nos últimos 30 dias.
+          </p>
+        ) : (
+          <ul className="space-y-2.5">
+            {rankCategorias.slice(0, 10).map((r) => {
+              const pct = totalCategoria > 0 ? (r.valor / totalCategoria) * 100 : 0;
+              return (
+                <li key={r.catId}>
+                  <div className="flex items-center justify-between gap-2 text-xs mb-1">
+                    <span className="font-semibold text-brand-dark truncate flex-1">{r.nome}</span>
+                    <span className="text-gray-500 flex-shrink-0">{pct.toFixed(1)}%</span>
+                    <span className="font-extrabold text-brand-dark flex-shrink-0 min-w-[80px] text-right">
+                      {fmtPreco(r.valor)}
+                    </span>
+                  </div>
+                  <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-brand-yellow rounded-full"
+                      style={{ width: `${Math.max(2, pct)}%` }}
+                    />
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
       </div>
 
       <form
@@ -141,5 +285,27 @@ function FiltroLink({ atual, valor, rotulo }: { atual: string; valor: string; ro
     >
       {rotulo}
     </a>
+  );
+}
+
+function KpiSimples({
+  rotulo,
+  valor,
+  Icon,
+  accent,
+}: {
+  rotulo: string;
+  valor: string;
+  Icon: typeof ShoppingBag;
+  accent: string;
+}) {
+  return (
+    <div className="bg-white rounded-2xl p-4 shadow-sm">
+      <div className={`w-9 h-9 rounded-xl inline-flex items-center justify-center mb-2 ${accent}`}>
+        <Icon className="w-4 h-4" />
+      </div>
+      <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">{rotulo}</p>
+      <p className="text-lg font-extrabold text-brand-dark mt-0.5">{valor}</p>
+    </div>
   );
 }

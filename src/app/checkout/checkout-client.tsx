@@ -22,6 +22,7 @@ import { Header } from "@/components/Header";
 import { useCart } from "@/contexts/CartContext";
 import { mensagemErroPedidoMinimo, subtotalAbaixoDoMinimo } from "@/lib/pedido-minimo";
 import { fmtPreco, validarCep, validarCpf, validarTelefoneBR } from "@/lib/utils";
+import { lerAtribuicaoCliente } from "@/lib/atribuicao";
 import { criarPedido } from "./actions";
 import { EtapaEntregador } from "./etapa-entregador";
 import {
@@ -272,6 +273,7 @@ export function CheckoutClient({ metodosAtivos }: { metodosAtivos: MetodosAtivos
 
     setEnviando(true);
     try {
+      const a = lerAtribuicaoCliente();
       const r = await criarPedido({
         cliente: {
           nome: dados.name,
@@ -309,6 +311,21 @@ export function CheckoutClient({ metodosAtivos }: { metodosAtivos: MetodosAtivos
                 parcelas: cartao.parcelas,
               }
             : undefined,
+        atribuicao: {
+          source: a.source,
+          medium: a.medium,
+          campaign: a.campaign,
+          adgroup: a.adgroup,
+          keyword: a.keyword,
+          searchterm: a.searchterm,
+          matchtype: a.matchtype,
+          device: a.device,
+          creative: a.creative,
+          gclid: a.gclid,
+          landingPage: a.landingPage,
+          referrer: a.referrer,
+          firstVisitAt: a.firstVisitAt,
+        },
       });
 
       if (!r.ok) {

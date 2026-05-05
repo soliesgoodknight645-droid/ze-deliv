@@ -18,10 +18,28 @@ export type ItemUpsellInput = {
   imagem?: string | null;
 };
 
+export type AtribuicaoUpsellInput = {
+  source?: string | null;
+  medium?: string | null;
+  campaign?: string | null;
+  adgroup?: string | null;
+  keyword?: string | null;
+  searchterm?: string | null;
+  matchtype?: string | null;
+  device?: string | null;
+  creative?: string | null;
+  gclid?: string | null;
+  landingPage?: string | null;
+  referrer?: string | null;
+  firstVisitAt?: string | null;
+};
+
 export type CriarPedidoUpsellInput = {
   pedidoRefNumero: string;
   itens: ItemUpsellInput[];
   observacoes?: string;
+  /** Atribuição capturada no front (first-click). */
+  atribuicao?: AtribuicaoUpsellInput;
 };
 
 export type CriarPedidoUpsellResultado =
@@ -72,7 +90,7 @@ export async function criarPedidoUpsell(
   const { data: ref } = await sb
     .from("pedidos")
     .select(
-      "id, numero, status, cliente_nome, cliente_telefone, cliente_cpf, endereco, criado_em, paid_at",
+      "id, numero, status, cliente_nome, cliente_telefone, cliente_cpf, endereco, criado_em, paid_at, traffic_source, traffic_medium, traffic_campaign, traffic_adgroup, traffic_keyword, traffic_searchterm, traffic_matchtype, traffic_device, traffic_creative, traffic_gclid, traffic_landing_page, traffic_referrer, first_visit_at",
     )
     .eq("numero", input.pedidoRefNumero)
     .maybeSingle();
@@ -116,6 +134,30 @@ export async function criarPedidoUpsell(
     .filter(Boolean)
     .join("\n");
 
+  // Para o upsell, herdamos a atribuição do pedido original sempre que possível —
+  // o segundo pedido é só um aceite de cupom dentro da mesma jornada de compra.
+  // Mas se o front mandou algo (ex: usuário voltou pelo histórico já com UTMs novas)
+  // e o pedido referência não tinha atribuição, usamos o que o front mandou.
+  const refTeve = Boolean(
+    ref.traffic_source || ref.traffic_medium || ref.traffic_campaign || ref.traffic_gclid,
+  );
+  const atrib = input.atribuicao ?? {};
+  const corta = (s: string | null | undefined, n = 255) =>
+    typeof s === "string" && s.trim() ? s.trim().slice(0, n) : null;
+  const escolher = <T extends string | null | undefined>(refVal: T, frontVal: T): string | null => {
+    if (refTeve) return (refVal as string | null) ?? null;
+    return corta(frontVal as string | null);
+  };
+  const firstVisit = (() => {
+    if (refTeve && ref.first_visit_at) return ref.first_visit_at as string;
+    if (atrib.firstVisitAt) {
+      const d = new Date(atrib.firstVisitAt);
+      if (!isNaN(d.getTime())) return d.toISOString();
+    }
+    return null;
+  })();
+  const agora = new Date().toISOString();
+
   const { data: pedido, error: errPedido } = await sb
     .from("pedidos")
     .insert({
@@ -134,6 +176,21 @@ export async function criarPedidoUpsell(
       cupom_desconto: calc.desconto,
       pedido_ref: ref.numero as string,
       observacoes: observacoesFinais || null,
+      // Atribuição: prioriza o pedido referência (mesma jornada)
+      traffic_source: escolher(ref.traffic_source as string | null, atrib.source),
+      traffic_medium: escolher(ref.traffic_medium as string | null, atrib.medium),
+      traffic_campaign: escolher(ref.traffic_campaign as string | null, atrib.campaign),
+      traffic_adgroup: escolher(ref.traffic_adgroup as string | null, atrib.adgroup),
+      traffic_keyword: escolher(ref.traffic_keyword as string | null, atrib.keyword),
+      traffic_searchterm: escolher(ref.traffic_searchterm as string | null, atrib.searchterm),
+      traffic_matchtype: escolher(ref.traffic_matchtype as string | null, atrib.matchtype),
+      traffic_device: escolher(ref.traffic_device as string | null, atrib.device),
+      traffic_creative: escolher(ref.traffic_creative as string | null, atrib.creative),
+      traffic_gclid: escolher(ref.traffic_gclid as string | null, atrib.gclid),
+      traffic_landing_page: escolher(ref.traffic_landing_page as string | null, atrib.landingPage),
+      traffic_referrer: escolher(ref.traffic_referrer as string | null, atrib.referrer),
+      first_visit_at: firstVisit,
+      conversion_at: agora,
     })
     .select("id, numero")
     .single();

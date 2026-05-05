@@ -26,6 +26,7 @@ import {
   validarSubtotalUpsell,
 } from "@/lib/cupom-upsell";
 import { fmtPreco } from "@/lib/utils";
+import { lerAtribuicaoCliente } from "@/lib/atribuicao";
 import type { Categoria, Produto } from "@/lib/types";
 import { criarPedidoUpsell, type ItemUpsellInput } from "./actions";
 
@@ -117,9 +118,25 @@ export function UpsellClient({ secoes }: { secoes: Secao[] }) {
         imagem: i.imagem,
       }));
 
+      const a = lerAtribuicaoCliente();
       const r = await criarPedidoUpsell({
         pedidoRefNumero: upsell.pedidoRef,
         itens: itensInput,
+        atribuicao: {
+          source: a.source,
+          medium: a.medium,
+          campaign: a.campaign,
+          adgroup: a.adgroup,
+          keyword: a.keyword,
+          searchterm: a.searchterm,
+          matchtype: a.matchtype,
+          device: a.device,
+          creative: a.creative,
+          gclid: a.gclid,
+          landingPage: a.landingPage,
+          referrer: a.referrer,
+          firstVisitAt: a.firstVisitAt,
+        },
       });
 
       if (!r.ok) {

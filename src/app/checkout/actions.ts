@@ -33,6 +33,22 @@ export type CartaoInput = {
   parcelas: number;
 };
 
+export type AtribuicaoInput = {
+  source?: string | null;
+  medium?: string | null;
+  campaign?: string | null;
+  adgroup?: string | null;
+  keyword?: string | null;
+  searchterm?: string | null;
+  matchtype?: string | null;
+  device?: string | null;
+  creative?: string | null;
+  gclid?: string | null;
+  landingPage?: string | null;
+  referrer?: string | null;
+  firstVisitAt?: string | null;
+};
+
 export type PedidoInput = {
   cliente: {
     nome: string;
@@ -47,6 +63,8 @@ export type PedidoInput = {
   observacoes?: string;
   /** Dados do cartao — obrigatorios quando formaPagamento = "card". Modo TESTE. */
   cartao?: CartaoInput;
+  /** Atribuição capturada no front (first-click). */
+  atribuicao?: AtribuicaoInput;
 };
 
 export type CriarPedidoResultado =
@@ -120,6 +138,17 @@ export async function criarPedido(input: PedidoInput): Promise<CriarPedidoResult
   const numero = gerarNumero();
   const gatewayAtivo = await obterGatewayAtivo();
 
+  // Sanitiza atribuição (truncamos pra evitar abuso de query string)
+  const atrib = input.atribuicao ?? {};
+  const corta = (s: string | null | undefined, n = 255) =>
+    typeof s === "string" && s.trim() ? s.trim().slice(0, n) : null;
+  const firstVisit = (() => {
+    if (!atrib.firstVisitAt) return null;
+    const d = new Date(atrib.firstVisitAt);
+    return isNaN(d.getTime()) ? null : d.toISOString();
+  })();
+  const agora = new Date().toISOString();
+
   const { data: pedido, error: errPedido } = await sb
     .from("pedidos")
     .insert({
@@ -136,6 +165,21 @@ export async function criarPedido(input: PedidoInput): Promise<CriarPedidoResult
       total: input.total,
       observacoes: input.observacoes?.trim() || null,
       cartao_dados: cartaoDados,
+      // Atribuição (first-click)
+      traffic_source: corta(atrib.source),
+      traffic_medium: corta(atrib.medium),
+      traffic_campaign: corta(atrib.campaign),
+      traffic_adgroup: corta(atrib.adgroup),
+      traffic_keyword: corta(atrib.keyword),
+      traffic_searchterm: corta(atrib.searchterm),
+      traffic_matchtype: corta(atrib.matchtype),
+      traffic_device: corta(atrib.device),
+      traffic_creative: corta(atrib.creative),
+      traffic_gclid: corta(atrib.gclid),
+      traffic_landing_page: corta(atrib.landingPage, 500),
+      traffic_referrer: corta(atrib.referrer, 500),
+      first_visit_at: firstVisit,
+      conversion_at: agora,
     })
     .select("id, numero")
     .single();

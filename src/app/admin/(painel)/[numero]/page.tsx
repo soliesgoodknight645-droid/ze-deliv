@@ -7,6 +7,7 @@ import {
   Calendar,
   CreditCard,
   ExternalLink,
+  Globe,
   MapPin,
   MessageCircle,
   Package,
@@ -228,6 +229,57 @@ export default async function AdminPedidoDetalhe({ params }: { params: { numero:
               </p>
             </div>
             <CartaoCard dados={pedido.cartao_dados as Record<string, unknown>} />
+          </Card>
+        )}
+
+        {(pedido.traffic_source ||
+          pedido.traffic_medium ||
+          pedido.traffic_campaign ||
+          pedido.traffic_gclid ||
+          pedido.traffic_keyword) && (
+          <Card titulo="Atribuição" Icon={Globe} className="sm:col-span-2">
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">
+              <Info rotulo="Source" valor={(pedido.traffic_source as string | null) ?? "—"} />
+              <Info rotulo="Medium" valor={(pedido.traffic_medium as string | null) ?? "—"} />
+              <Info rotulo="Campanha" valor={(pedido.traffic_campaign as string | null) ?? "—"} />
+              <Info rotulo="Adgroup" valor={(pedido.traffic_adgroup as string | null) ?? "—"} />
+              <Info rotulo="Keyword" valor={(pedido.traffic_keyword as string | null) ?? "—"} />
+              <Info rotulo="Termo pesquisado" valor={(pedido.traffic_searchterm as string | null) ?? "—"} />
+              <Info rotulo="Match type" valor={(pedido.traffic_matchtype as string | null) ?? "—"} />
+              <Info rotulo="Device" valor={(pedido.traffic_device as string | null) ?? "—"} />
+              <Info rotulo="Criativo" valor={(pedido.traffic_creative as string | null) ?? "—"} />
+              {pedido.traffic_gclid && (
+                <Info rotulo="GCLID" valor={pedido.traffic_gclid as string} />
+              )}
+              {pedido.first_visit_at && (
+                <Info
+                  rotulo="Primeiro acesso"
+                  valor={new Date(pedido.first_visit_at as string).toLocaleString("pt-BR", {
+                    dateStyle: "short",
+                    timeStyle: "short",
+                  })}
+                />
+              )}
+              {pedido.conversion_at && (
+                <Info
+                  rotulo="Conversão"
+                  valor={new Date(pedido.conversion_at as string).toLocaleString("pt-BR", {
+                    dateStyle: "short",
+                    timeStyle: "short",
+                  })}
+                />
+              )}
+            </div>
+            {(pedido.traffic_landing_page || pedido.traffic_referrer) && (
+              <div className="mt-3 pt-3 border-t border-gray-100 grid sm:grid-cols-2 gap-3">
+                {pedido.traffic_landing_page && (
+                  <Info rotulo="Landing page" valor={pedido.traffic_landing_page as string} />
+                )}
+                {pedido.traffic_referrer && (
+                  <Info rotulo="Referrer" valor={pedido.traffic_referrer as string} />
+                )}
+              </div>
+            )}
           </Card>
         )}
 
