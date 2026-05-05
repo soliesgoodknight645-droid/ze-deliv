@@ -14,6 +14,63 @@ export function fmtPreco(valor: number): string {
   });
 }
 
+// =====================================================================
+// Datas com fuso horário do Brasil (America/Sao_Paulo)
+// =====================================================================
+// O servidor (Vercel) roda em UTC. Usar `toLocaleString` sem timeZone
+// fixo faz aparecer 3h adiantado no SSR. Sempre forcamos `America/Sao_Paulo`.
+const FUSO_BR = "America/Sao_Paulo" as const;
+
+export function fmtDataHoraBR(d: Date | string | null | undefined): string {
+  if (!d) return "";
+  const date = typeof d === "string" ? new Date(d) : d;
+  if (isNaN(date.getTime())) return "";
+  return date.toLocaleString("pt-BR", {
+    timeZone: FUSO_BR,
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+export function fmtDataBR(d: Date | string | null | undefined): string {
+  if (!d) return "";
+  const date = typeof d === "string" ? new Date(d) : d;
+  if (isNaN(date.getTime())) return "";
+  return date.toLocaleDateString("pt-BR", {
+    timeZone: FUSO_BR,
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  });
+}
+
+export function fmtDataLongaBR(d: Date | string | null | undefined): string {
+  if (!d) return "";
+  const date = typeof d === "string" ? new Date(d) : d;
+  if (isNaN(date.getTime())) return "";
+  return date.toLocaleString("pt-BR", {
+    timeZone: FUSO_BR,
+    day: "2-digit",
+    month: "long",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+/**
+ * Retorna a data ISO (YYYY-MM-DD) representando o "dia BR" daquele timestamp.
+ * Util para agrupar pedidos por dia no fuso de Sao Paulo (em vez do UTC do servidor).
+ */
+export function diaIsoBR(d: Date | string): string {
+  const date = typeof d === "string" ? new Date(d) : d;
+  // pt-CA dá ISO yyyy-mm-dd direto
+  return date.toLocaleDateString("en-CA", { timeZone: FUSO_BR });
+}
+
 export function calcDesconto(price?: number | null, promoPrice?: number | null): number {
   if (!price || !promoPrice || price <= promoPrice) return 0;
   return Math.round(((price - promoPrice) / price) * 100);

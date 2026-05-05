@@ -12,7 +12,7 @@ import {
   Users,
 } from "lucide-react";
 import { createSupabaseAdmin } from "@/lib/supabase/admin";
-import { fmtPreco, fmtTelefone } from "@/lib/utils";
+import { diaIsoBR, fmtPreco, fmtTelefone } from "@/lib/utils";
 import { DashboardClient, type LinhaPedidoDashboard, type Ranking } from "./dashboard-client";
 
 export const dynamic = "force-dynamic";
@@ -65,6 +65,17 @@ function rotuloOuOrganic(v: string | null | undefined): string {
   return v;
 }
 
+// Pago "real" = status pago e nao foi marcado manualmente pelo admin.
+// `gateway_status = 'ADMIN_MARCADO_PAGO'` é setado pelo botão "Marcar como pago"
+// no detalhe do pedido — esses só servem pra furar o funil em testes
+// e nao devem inflar os numeros do dashboard.
+const STATUS_PAGOS_SET = new Set(["pago", "em_separacao", "em_entrega", "concluido"]);
+function ehPagoReal(p: { status: string; gateway_status?: string | null }): boolean {
+  if (!STATUS_PAGOS_SET.has(p.status)) return false;
+  if (p.gateway_status === "ADMIN_MARCADO_PAGO") return false;
+  return true;
+}
+
 function rankear(
   pedidos: PedidoComItens[],
   campo: keyof Pick<
@@ -79,7 +90,7 @@ function rankear(
       ? `${rotuloOuOrganic(p.traffic_source as string | null)} / ${rotuloOuOrganic(p.traffic_medium as string | null)}`
       : rotuloOuOrganic(p[campo] as string | null);
     const total = Number(p.total ?? 0);
-    const pago = p.status === "pago" || p.status === "concluido" || p.status === "em_separacao" || p.status === "em_entrega";
+    const pago = ehPagoReal(p);
     if (!mapa.has(v)) {
       mapa.set(v, { chave: v, leads: 0, pedidos: 0, faturamento: 0 });
     }
@@ -102,6 +113,7 @@ type PedidoBase = {
   cliente_telefone: string;
   criado_em: string;
   paid_at: string | null;
+  gateway_status: string | null;
   traffic_source: string | null;
   traffic_medium: string | null;
   traffic_campaign: string | null;
@@ -153,6 +165,7 @@ export default async function DashboardAtribuicaoPage({
     .from("pedidos")
     .select(
       `id, numero, status, total, cliente_nome, cliente_telefone, criado_em, paid_at,
+       gateway_status,
        traffic_source, traffic_medium, traffic_campaign, traffic_adgroup,
        traffic_keyword, traffic_searchterm, traffic_matchtype, traffic_device,
        traffic_creative, traffic_gclid, traffic_landing_page, traffic_referrer,
@@ -190,13 +203,14 @@ export default async function DashboardAtribuicaoPage({
 
   // ===== KPIs =====
   const totalLeads = pedidos.length;
-  const pagos = pedidos.filter(
-    (p) => p.status === "pago" || p.status === "em_separacao" || p.status === "em_entrega" || p.status === "concluido",
-  );
+  const pagos = pedidos.filter(ehPagoReal);
   const totalPagos = pagos.length;
   const faturamento = pagos.reduce((s, p) => s + Number(p.total ?? 0), 0);
   const ticketMedio = totalPagos > 0 ? faturamento / totalPagos : 0;
   const taxaConversao = totalLeads > 0 ? (totalPagos / totalLeads) * 100 : 0;
+  const totalManuais = pedidos.filter(
+    (p) => STATUS_PAGOS_SET.has(p.status) && p.gateway_status === "ADMIN_MARCADO_PAGO",
+  ).length;
 
   // ===== Rankings =====
   const rankCampanha = rankear(pedidos, "traffic_campaign").slice(0, 15);
@@ -280,10 +294,11 @@ export default async function DashboardAtribuicaoPage({
     .slice(0, 15);
   const totalFatProdutos = rankProdutos.reduce((s, r) => s + r.faturamento, 0);
 
-  // ===== Faturamento por dia (gráfico) =====
+  // ===== Faturamento por dia (gráfico) — agrupando no fuso de São Paulo =====
+  // Antes pegavamos `criado_em.slice(0, 10)` (UTC), o que jogava pedidos
+  // feitos a noite (BR) pro dia seguinte. Agora normalizamos pelo fuso BR.
   type Dia = { data: string; leads: number; pagos: number; faturamento: number };
   const porDia = new Map<string, Dia>();
-  // pré-popular faixa para dias zerados aparecerem no gráfico
   const totalDias = Math.max(
     1,
     Math.ceil((ateDate.getTime() - deDate.getTime()) / (24 * 60 * 60 * 1000)),
@@ -291,22 +306,17 @@ export default async function DashboardAtribuicaoPage({
   for (let i = 0; i <= totalDias; i++) {
     const d = new Date(deDate);
     d.setDate(d.getDate() + i);
-    const k = d.toISOString().slice(0, 10);
-    porDia.set(k, { data: k, leads: 0, pagos: 0, faturamento: 0 });
+    const k = diaIsoBR(d);
+    if (!porDia.has(k)) porDia.set(k, { data: k, leads: 0, pagos: 0, faturamento: 0 });
   }
   for (const p of pedidos) {
-    const k = (p.criado_em as string).slice(0, 10);
+    const k = diaIsoBR(p.criado_em as string);
     if (!porDia.has(k)) {
       porDia.set(k, { data: k, leads: 0, pagos: 0, faturamento: 0 });
     }
     const dia = porDia.get(k)!;
     dia.leads += 1;
-    if (
-      p.status === "pago" ||
-      p.status === "em_separacao" ||
-      p.status === "em_entrega" ||
-      p.status === "concluido"
-    ) {
+    if (ehPagoReal(p)) {
       dia.pagos += 1;
       dia.faturamento += Number(p.total ?? 0);
     }
@@ -325,6 +335,7 @@ export default async function DashboardAtribuicaoPage({
           ? `${itens[0].quantidade}× ${itens[0].produto_nome}`
           : `${itens[0].quantidade}× ${itens[0].produto_nome} (+${itens.length - 1})`;
     const meta = STATUS_LABEL[p.status] ?? { texto: p.status, cor: "bg-gray-100 text-gray-700" };
+    const manualPago = p.gateway_status === "ADMIN_MARCADO_PAGO";
     return {
       id: p.id,
       numero: p.numero,
@@ -333,8 +344,9 @@ export default async function DashboardAtribuicaoPage({
       produto,
       total: Number(p.total ?? 0),
       status: p.status,
-      statusLabel: meta.texto,
-      statusCor: meta.cor,
+      statusLabel: manualPago ? `${meta.texto} (manual)` : meta.texto,
+      statusCor: manualPago ? "bg-gray-200 text-gray-700" : meta.cor,
+      manualPago,
       criadoEm: p.criado_em,
       paidAt: p.paid_at,
       source: p.traffic_source,
@@ -467,6 +479,19 @@ export default async function DashboardAtribuicaoPage({
       {error && (
         <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl p-4 text-sm mb-4">
           Erro ao carregar dados: {error.message}
+        </div>
+      )}
+
+      {totalManuais > 0 && (
+        <div className="bg-blue-50 border border-blue-200 text-blue-800 rounded-xl px-4 py-3 text-xs mb-4 flex items-start gap-2">
+          <span className="font-bold">ℹ</span>
+          <span>
+            <strong>{totalManuais}</strong>{" "}
+            pedido{totalManuais === 1 ? "" : "s"} marcado{totalManuais === 1 ? "" : "s"} como pago
+            manualmente pelo admin {totalManuais === 1 ? "foi excluído" : "foram excluídos"} dos KPIs,
+            rankings, gráficos e do faturamento por categoria — eles aparecem na tabela detalhada
+            com o badge <em>“(manual)”</em>.
+          </span>
         </div>
       )}
 

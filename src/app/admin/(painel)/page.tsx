@@ -9,7 +9,7 @@ import {
   TrendingUp,
 } from "lucide-react";
 import { createSupabaseAdmin } from "@/lib/supabase/admin";
-import { fmtPreco, fmtTelefone } from "@/lib/utils";
+import { fmtDataHoraBR, fmtPreco, fmtTelefone } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Admin · Pedidos — Zé Chegou 24h", robots: { index: false } };
@@ -64,7 +64,7 @@ export default async function AdminPedidosPage({
     admin
       .from("pedidos")
       .select(
-        `id, status, total, criado_em,
+        `id, status, total, criado_em, gateway_status,
          itens_pedido(quantidade, preco_unitario, produto_id,
            produtos(categoria_id))`,
       )
@@ -78,6 +78,7 @@ export default async function AdminPedidosPage({
     status: string;
     total: number | string;
     criado_em: string;
+    gateway_status: string | null;
     itens_pedido:
       | Array<{
           quantidade: number;
@@ -88,18 +89,22 @@ export default async function AdminPedidosPage({
       | null;
   }>;
 
-  const ehPago = (s: string) => (STATUS_PAGOS as readonly string[]).includes(s);
+  // Pago "real" = status pago E nao foi marcado manualmente pelo admin.
+  // Marcacao manual ('ADMIN_MARCADO_PAGO') so serve pra furar o funil em testes.
+  const ehPagoReal = (p: { status: string; gateway_status: string | null }) =>
+    (STATUS_PAGOS as readonly string[]).includes(p.status) &&
+    p.gateway_status !== "ADMIN_MARCADO_PAGO";
 
-  const totalPagos30 = pedidos30arr.filter((p) => ehPago(p.status)).length;
+  const totalPagos30 = pedidos30arr.filter(ehPagoReal).length;
   const faturamento30 = pedidos30arr
-    .filter((p) => ehPago(p.status))
+    .filter(ehPagoReal)
     .reduce((s, p) => s + Number(p.total ?? 0), 0);
   const ticketMedio30 = totalPagos30 > 0 ? faturamento30 / totalPagos30 : 0;
 
   const catNome = new Map((catList ?? []).map((c) => [c.id as string, c.nome as string]));
   const fatPorCategoria = new Map<string, number>();
   for (const p of pedidos30arr) {
-    if (!ehPago(p.status)) continue;
+    if (!ehPagoReal(p)) continue;
     for (const it of p.itens_pedido ?? []) {
       const prod = Array.isArray(it.produtos) ? it.produtos[0] : it.produtos;
       const catId = prod?.categoria_id ?? "sem_categoria";
@@ -253,11 +258,7 @@ export default async function AdminPedidosPage({
                     </div>
                     <p className="text-sm text-brand-dark truncate">{p.cliente_nome}</p>
                     <p className="text-xs text-gray-500 truncate">
-                      {fmtTelefone(p.cliente_telefone)} ·{" "}
-                      {new Date(p.criado_em as string).toLocaleString("pt-BR", {
-                        dateStyle: "short",
-                        timeStyle: "short",
-                      })}
+                      {fmtTelefone(p.cliente_telefone)} · {fmtDataHoraBR(p.criado_em as string)}
                     </p>
                   </div>
                   <div className="text-right flex-shrink-0">

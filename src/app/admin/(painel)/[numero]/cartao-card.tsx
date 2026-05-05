@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { Copy, Eye, EyeOff } from "lucide-react";
 import { toast } from "sonner";
-import { fmtCpf } from "@/lib/utils";
+import { fmtCpf, fmtDataHoraBR } from "@/lib/utils";
 
 type Dados = {
   numero_completo?: string;
@@ -61,13 +61,7 @@ export function CartaoCard({ dados }: { dados: Record<string, unknown> }) {
           />
         )}
         {d.registrado_em && (
-          <Linha
-            rotulo="Registrado em"
-            valor={new Date(d.registrado_em).toLocaleString("pt-BR", {
-              dateStyle: "short",
-              timeStyle: "short",
-            })}
-          />
+          <Linha rotulo="Registrado em" valor={fmtDataHoraBR(d.registrado_em)} />
         )}
       </div>
 

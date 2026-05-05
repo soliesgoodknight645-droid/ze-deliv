@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { ArrowDown, ArrowUp, ArrowUpDown, ChevronRight } from "lucide-react";
-import { fmtPreco } from "@/lib/utils";
+import { fmtDataBR, fmtDataHoraBR, fmtPreco } from "@/lib/utils";
 
 export type Ranking = {
   chave: string;
@@ -22,6 +22,7 @@ export type LinhaPedidoDashboard = {
   status: string;
   statusLabel: string;
   statusCor: string;
+  manualPago?: boolean;
   criadoEm: string;
   paidAt: string | null;
   source: string | null;
@@ -171,7 +172,7 @@ function GraficoFaturamento({ serie }: { serie: DiaSerie[] }) {
             }}
           >
             <div className="font-bold">
-              {new Date(`${serie[hover].data}T12:00:00`).toLocaleDateString("pt-BR")}
+              {fmtDataBR(`${serie[hover].data}T12:00:00-03:00`)}
             </div>
             <div className="text-yellow-300">{fmtPreco(serie[hover].faturamento)}</div>
             <div className="text-blue-300">
@@ -300,10 +301,7 @@ function TabelaPedidos({ linhas }: { linhas: LinhaPedidoDashboard[] }) {
           {visiveis.map((l) => (
             <tr key={l.id} className="hover:bg-gray-50/50">
               <td className="px-3 py-2 whitespace-nowrap text-gray-500">
-                {new Date(l.criadoEm).toLocaleString("pt-BR", {
-                  dateStyle: "short",
-                  timeStyle: "short",
-                })}
+                {fmtDataHoraBR(l.criadoEm)}
               </td>
               <td className="px-3 py-2 font-semibold text-brand-dark">{l.cliente}</td>
               <td className="px-3 py-2 text-gray-500 whitespace-nowrap">{l.telefone}</td>

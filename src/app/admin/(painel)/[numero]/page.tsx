@@ -16,7 +16,15 @@ import {
   User,
 } from "lucide-react";
 import { createSupabaseAdmin } from "@/lib/supabase/admin";
-import { fmtCep, fmtCpf, fmtPreco, fmtTelefone, linkWhatsApp } from "@/lib/utils";
+import {
+  fmtCep,
+  fmtCpf,
+  fmtDataHoraBR,
+  fmtDataLongaBR,
+  fmtPreco,
+  fmtTelefone,
+  linkWhatsApp,
+} from "@/lib/utils";
 import { AcoesStatus } from "./acoes-status";
 import { CartaoCard } from "./cartao-card";
 
@@ -71,11 +79,7 @@ export default async function AdminPedidoDetalhe({ params }: { params: { numero:
           <h1 className="font-extrabold text-2xl text-brand-dark">Pedido {pedido.numero}</h1>
           <p className="text-xs text-gray-500 mt-1 inline-flex items-center gap-1.5">
             <Calendar className="w-3.5 h-3.5" />
-            Criado em{" "}
-            {new Date(pedido.criado_em as string).toLocaleString("pt-BR", {
-              dateStyle: "long",
-              timeStyle: "short",
-            })}
+            Criado em {fmtDataLongaBR(pedido.criado_em as string)}
           </p>
         </div>
         <span className={`self-start text-xs font-bold px-3 py-1.5 rounded-full ${meta.cor}`}>
@@ -177,13 +181,7 @@ export default async function AdminPedidoDetalhe({ params }: { params: { numero:
               <Info rotulo="Status no gateway" valor={pedido.gateway_status} />
             )}
             {pedido.paid_at && (
-              <Info
-                rotulo="Pago em"
-                valor={new Date(pedido.paid_at as string).toLocaleString("pt-BR", {
-                  dateStyle: "short",
-                  timeStyle: "short",
-                })}
-              />
+              <Info rotulo="Pago em" valor={fmtDataHoraBR(pedido.paid_at as string)} />
             )}
           </div>
           {(pedido.order_url || pedido.receipt_url) && (
@@ -254,20 +252,11 @@ export default async function AdminPedidoDetalhe({ params }: { params: { numero:
               {pedido.first_visit_at && (
                 <Info
                   rotulo="Primeiro acesso"
-                  valor={new Date(pedido.first_visit_at as string).toLocaleString("pt-BR", {
-                    dateStyle: "short",
-                    timeStyle: "short",
-                  })}
+                  valor={fmtDataHoraBR(pedido.first_visit_at as string)}
                 />
               )}
               {pedido.conversion_at && (
-                <Info
-                  rotulo="Conversão"
-                  valor={new Date(pedido.conversion_at as string).toLocaleString("pt-BR", {
-                    dateStyle: "short",
-                    timeStyle: "short",
-                  })}
-                />
+                <Info rotulo="Conversão" valor={fmtDataHoraBR(pedido.conversion_at as string)} />
               )}
             </div>
             {(pedido.traffic_landing_page || pedido.traffic_referrer) && (
@@ -291,10 +280,7 @@ export default async function AdminPedidoDetalhe({ params }: { params: { numero:
                   <span className="w-1.5 h-1.5 rounded-full bg-brand-yellow flex-shrink-0" />
                   <span className="font-semibold capitalize">{e.tipo.replace(/_/g, " ")}</span>
                   <span className="text-xs text-gray-400 ml-auto">
-                    {new Date(e.criado_em as string).toLocaleString("pt-BR", {
-                      dateStyle: "short",
-                      timeStyle: "short",
-                    })}
+                    {fmtDataHoraBR(e.criado_em as string)}
                   </span>
                 </li>
               ))}
