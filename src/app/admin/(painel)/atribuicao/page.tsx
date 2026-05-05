@@ -132,10 +132,10 @@ type PedidoBase = {
 
 type ItemDoPedido = {
   produto_nome: string;
+  produto_slug: string;
   quantidade: number;
   preco_unitario: number | string;
   produto_id: string;
-  produtos: { categoria_id: string } | { categoria_id: string }[] | null;
 };
 
 type PedidoComItens = PedidoBase & {
@@ -170,8 +170,7 @@ export default async function DashboardAtribuicaoPage({
        traffic_keyword, traffic_searchterm, traffic_matchtype, traffic_device,
        traffic_creative, traffic_gclid, traffic_landing_page, traffic_referrer,
        first_visit_at, conversion_at,
-       itens_pedido(produto_nome, quantidade, preco_unitario, produto_id,
-         produtos(categoria_id))`,
+       itens_pedido(produto_nome, produto_slug, quantidade, preco_unitario, produto_id)`,
     )
     .gte("criado_em", deDate.toISOString())
     .lte("criado_em", ateDate.toISOString())
@@ -194,12 +193,20 @@ export default async function DashboardAtribuicaoPage({
     );
   }
 
-  const [{ data: pedidosRaw, error }, { data: catsList }] = await Promise.all([
-    query,
-    admin.from("categorias").select("id, nome").order("ordem", { ascending: true }),
-  ]);
+  // Nao da pra fazer join Postgrest itens_pedido -> produtos porque produto_id
+  // em itens_pedido e text (sem FK formal). Usamos `produto_slug` para mapear,
+  // ja que slug e unique em produtos.
+  const [{ data: pedidosRaw, error }, { data: catsList }, { data: produtosList }] =
+    await Promise.all([
+      query,
+      admin.from("categorias").select("id, nome").order("ordem", { ascending: true }),
+      admin.from("produtos").select("slug, categoria_id"),
+    ]);
   const pedidos = (pedidosRaw ?? []) as unknown as PedidoComItens[];
   const catNomePorId = new Map((catsList ?? []).map((c) => [c.id as string, c.nome as string]));
+  const slugParaCat = new Map(
+    (produtosList ?? []).map((p) => [p.slug as string, p.categoria_id as string]),
+  );
 
   // ===== KPIs =====
   const totalLeads = pedidos.length;
@@ -236,8 +243,7 @@ export default async function DashboardAtribuicaoPage({
     const idsCatNoPedido = new Set<string>();
     const idsProdNoPedido = new Set<string>();
     for (const it of itens) {
-      const prod = Array.isArray(it.produtos) ? it.produtos[0] : it.produtos;
-      const catId = prod?.categoria_id ?? "sem_categoria";
+      const catId = slugParaCat.get(it.produto_slug) ?? "sem_categoria";
       const valor = Number(it.preco_unitario) * Number(it.quantidade);
 
       if (!fatPorCategoria.has(catId)) {

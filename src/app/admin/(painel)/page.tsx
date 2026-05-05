@@ -60,17 +60,19 @@ export default async function AdminPedidosPage({
     return d.toISOString();
   })();
 
-  const [{ data: pedidos30 }, { data: catList }] = await Promise.all([
+  // Sem join PostgREST entre itens_pedido e produtos (produto_id e text sem FK).
+  // Mapeamos por slug.
+  const [{ data: pedidos30 }, { data: catList }, { data: produtosList }] = await Promise.all([
     admin
       .from("pedidos")
       .select(
         `id, status, total, criado_em, gateway_status,
-         itens_pedido(quantidade, preco_unitario, produto_id,
-           produtos(categoria_id))`,
+         itens_pedido(quantidade, preco_unitario, produto_slug)`,
       )
       .gte("criado_em", desdeIso)
       .limit(2000),
     admin.from("categorias").select("id, nome").order("ordem", { ascending: true }),
+    admin.from("produtos").select("slug, categoria_id"),
   ]);
 
   const pedidos30arr = (pedidos30 ?? []) as Array<{
@@ -83,11 +85,13 @@ export default async function AdminPedidosPage({
       | Array<{
           quantidade: number;
           preco_unitario: number | string;
-          produto_id: string;
-          produtos: { categoria_id: string } | { categoria_id: string }[] | null;
+          produto_slug: string;
         }>
       | null;
   }>;
+  const slugParaCat = new Map(
+    (produtosList ?? []).map((p) => [p.slug as string, p.categoria_id as string]),
+  );
 
   // Pago "real" = status pago E nao foi marcado manualmente pelo admin.
   // Marcacao manual ('ADMIN_MARCADO_PAGO') so serve pra furar o funil em testes.
@@ -106,8 +110,7 @@ export default async function AdminPedidosPage({
   for (const p of pedidos30arr) {
     if (!ehPagoReal(p)) continue;
     for (const it of p.itens_pedido ?? []) {
-      const prod = Array.isArray(it.produtos) ? it.produtos[0] : it.produtos;
-      const catId = prod?.categoria_id ?? "sem_categoria";
+      const catId = slugParaCat.get(it.produto_slug) ?? "sem_categoria";
       const valor = Number(it.preco_unitario) * Number(it.quantidade);
       fatPorCategoria.set(catId, (fatPorCategoria.get(catId) ?? 0) + valor);
     }
