@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createSupabaseAdmin } from "@/lib/supabase/admin";
-import { mapearStatusPedido } from "@/lib/onetimepay";
+import { eventoEhPago, mapearStatusPedido, statusEhPago } from "@/lib/onetimepay";
 import { broadcastStatusPedido } from "@/lib/realtime-pedido";
 import { revalidateTag } from "next/cache";
 
@@ -37,14 +37,17 @@ type WebhookBody = {
     id?: string;
     identifier?: string;
     status?: string;
+    subStatus?: string;
     amount?: number;
     paymentMethod?: string;
     payedAt?: string | null;
+    paidAt?: string | null;
   };
   // formato alternativo (alguns gateways mandam flat)
   identifier?: string;
   transactionId?: string;
   status?: string;
+  subStatus?: string;
 };
 
 export async function POST(req: NextRequest) {
@@ -65,9 +68,15 @@ export async function POST(req: NextRequest) {
     id: payload.transactionId,
     identifier: payload.identifier,
     status: payload.status,
+    subStatus: payload.subStatus,
   };
   const identifier = tx.identifier ?? null;
   const transactionId = tx.id ?? null;
+  // Algumas adquirentes da OneTimePay devolvem o status real em `subStatus`,
+  // deixando o `status` em algo intermediario (tipo "PROCESSING"). Olhamos os
+  // dois pra detectar pagamento.
+  const statusBruto = tx.status ?? "";
+  const subStatusBruto = tx.subStatus ?? "";
 
   // Auditoria — guarda o payload bruto sempre (mesmo se nao achar pedido)
   let pedidoId: string | null = null;
@@ -96,8 +105,17 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, ignorado: true, motivo: "pedido nao encontrado" });
   }
 
-  const novoStatusInterno = tx.status ? mapearStatusPedido(tx.status) : null;
-  const isPago = evento === "TRANSACTION_PAID" || tx.status === "COMPLETED" || tx.status === "PAID";
+  // Mapeia o status considerando status principal e subStatus (algumas
+  // adquirentes nova-OneTimePay enviam o status real em `subStatus`).
+  const novoStatusInterno = statusBruto
+    ? mapearStatusPedido(statusBruto)
+    : subStatusBruto
+      ? mapearStatusPedido(subStatusBruto)
+      : null;
+  const isPago =
+    eventoEhPago(evento) ||
+    statusEhPago(statusBruto) ||
+    statusEhPago(subStatusBruto);
 
   // Re-le o pedido pra saber o status atual e nunca rebaixar pedidos que ja
   // avancaram (admin marcou pago manualmente, ja esta em separacao etc).
@@ -111,7 +129,7 @@ export async function POST(req: NextRequest) {
   const ehTravado = statusAtual ? STATUS_TRAVADOS.includes(statusAtual) : false;
 
   const updates: Record<string, unknown> = {
-    gateway_status: tx.status ?? evento,
+    gateway_status: statusBruto || subStatusBruto || evento,
     webhook_payload: payload as unknown as Record<string, unknown>,
   };
   if (transactionId) updates.gateway_id = transactionId;
@@ -119,12 +137,17 @@ export async function POST(req: NextRequest) {
     updates.status = "pago";
     // Marca o horario do pagamento (usado pro cronometro de entrega).
     // Preferimos o timestamp que o gateway mandou; se nao tiver, usa agora.
-    updates.paid_at = tx.payedAt ?? new Date().toISOString();
+    // Algumas adquirentes mandam `paidAt` em vez de `payedAt`.
+    updates.paid_at = tx.payedAt ?? tx.paidAt ?? new Date().toISOString();
   } else if (novoStatusInterno && !ehTravado) {
     // So aplica novo status se o pedido ainda nao avancou. Evita um webhook
     // de "pending" voltar a status de pedido que ja foi pago/separado.
     updates.status = novoStatusInterno;
   }
+
+  console.log(
+    `[webhook] pedido=${identifier} evento=${evento} status=${statusBruto} subStatus=${subStatusBruto} -> isPago=${isPago}`,
+  );
 
   const { error: errUpd } = await sb.from("pedidos").update(updates).eq("id", pedidoId);
   if (errUpd) {
@@ -144,11 +167,12 @@ export async function POST(req: NextRequest) {
     tipo: isPago ? "pagamento_confirmado" : "webhook",
     dados: {
       evento,
-      status: tx.status,
+      status: statusBruto || null,
+      subStatus: subStatusBruto || null,
       transactionId,
       descricao: isPago
         ? `Pagamento confirmado via PIX (OneTimePay)`
-        : `Webhook ${evento} (status ${tx.status ?? "?"})`,
+        : `Webhook ${evento} (status ${statusBruto || subStatusBruto || "?"})`,
     },
   });
 

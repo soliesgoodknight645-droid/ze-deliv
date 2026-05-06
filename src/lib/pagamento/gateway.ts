@@ -328,11 +328,22 @@ export async function consultarStatusPedido(pedido: {
     const r = await otp.consultarTransacaoPorIdentifier(pedido.numero);
     const item =
       r.data?.items?.[0] ||
-      (r.transactionId ? { transactionId: r.transactionId, status: r.status ?? "" } : null);
+      (r.transactionId
+        ? { transactionId: r.transactionId, status: r.status ?? "", subStatus: r.subStatus }
+        : null);
     if (!item?.status) return null;
+    // Algumas adquirentes da OneTimePay devolvem o status real em `subStatus`,
+    // deixando o `status` em algo intermediario. Se o subStatus indicar pago,
+    // priorizamos ele.
+    const statusEfetivo = otp.statusEhPago(item.subStatus) ? item.subStatus! : item.status;
+    if (item.status !== statusEfetivo) {
+      console.log(
+        `[gateway/onetimepay] usando subStatus '${item.subStatus}' em vez de status '${item.status}' para ${pedido.numero}`,
+      );
+    }
     return {
-      gatewayStatus: item.status,
-      statusInterno: otp.mapearStatusPedido(item.status),
+      gatewayStatus: statusEfetivo,
+      statusInterno: otp.mapearStatusPedido(statusEfetivo),
       transactionId: item.transactionId,
     };
   }

@@ -219,6 +219,7 @@ export type ConsultarTransacaoResposta = {
   // formato simplificado pra um item so
   transactionId?: string;
   status?: string;
+  subStatus?: string;
 };
 
 export async function consultarTransacaoPorIdentifier(identifier: string) {
@@ -240,13 +241,97 @@ export async function consultarTransacaoPorIdentifier(identifier: string) {
 }
 
 /**
+ * Status que indicam pagamento confirmado em alguma adquirente da OneTimePay.
+ * Quando a adquirente muda (já aconteceu na pratica), o status retornado pode
+ * variar. Mantemos uma lista bem permissiva — sempre que o backend conseguir
+ * provar que entrou dinheiro, o pedido vira `pago`.
+ */
+const STATUS_PAGOS = new Set([
+  "COMPLETED",
+  "PAID",
+  "APPROVED",
+  "AUTHORIZED",
+  "CONFIRMED",
+  "RECEIVED",
+  "SETTLED",
+  "SUCCESS",
+  "SUCCEEDED",
+  "FINISHED",
+  "DONE",
+  "OK",
+]);
+
+const STATUS_CANCELADOS = new Set([
+  "FAILED",
+  "FAIL",
+  "CANCELED",
+  "CANCELLED",
+  "REJECTED",
+  "DECLINED",
+  "EXPIRED",
+  "REFUNDED",
+  "CHARGED_BACK",
+  "CHARGEBACK",
+]);
+
+/**
+ * Eventos do webhook que indicam que entrou dinheiro. Mantido permissivo
+ * pelo mesmo motivo do `STATUS_PAGOS`.
+ */
+const EVENTOS_PAGOS = new Set([
+  "TRANSACTION_PAID",
+  "TRANSACTION_APPROVED",
+  "TRANSACTION_RECEIVED",
+  "TRANSACTION_COMPLETED",
+  "TRANSACTION_CONFIRMED",
+  "TRANSACTION_SETTLED",
+  "PIX_RECEIVED",
+  "PAYMENT_RECEIVED",
+  "PAYMENT_CONFIRMED",
+  "PAYMENT_APPROVED",
+]);
+
+const EVENTOS_CANCELADOS = new Set([
+  "TRANSACTION_CANCELED",
+  "TRANSACTION_CANCELLED",
+  "TRANSACTION_FAILED",
+  "TRANSACTION_EXPIRED",
+  "TRANSACTION_REFUNDED",
+  "TRANSACTION_CHARGEBACK",
+]);
+
+/**
  * Mapeia status da OneTimePay pra nosso enum de status do pedido.
- * Status conhecidos: PENDING, COMPLETED, FAILED, REFUNDED, CHARGED_BACK, CANCELED
+ *
+ * Aceita as variacoes conhecidas das adquirentes que ja vimos na OneTimePay.
+ * Se chegar um status fora da lista, loga `console.warn` (aparece no Vercel)
+ * pra a gente conseguir adicionar a variacao depois — mas trata como
+ * `aguardando_pagamento` por padrao pra nao confirmar pagamento por engano.
  */
 export function mapearStatusPedido(otpStatus: string): string {
   const s = otpStatus.toUpperCase();
-  if (s === "COMPLETED" || s === "PAID") return "pago";
-  if (s === "FAILED" || s === "CANCELED") return "cancelado";
-  if (s === "REFUNDED" || s === "CHARGED_BACK") return "cancelado";
+  if (STATUS_PAGOS.has(s)) return "pago";
+  if (STATUS_CANCELADOS.has(s)) return "cancelado";
+  if (s !== "PENDING" && s !== "WAITING" && s !== "PROCESSING" && s !== "CREATED") {
+    console.warn("[onetimepay] status desconhecido:", otpStatus);
+  }
   return "aguardando_pagamento";
+}
+
+/** Indica se um status do gateway representa pagamento concluido. */
+export function statusEhPago(otpStatus?: string | null): boolean {
+  if (!otpStatus) return false;
+  return STATUS_PAGOS.has(otpStatus.toUpperCase());
+}
+
+/** Indica se um evento de webhook representa pagamento concluido. */
+export function eventoEhPago(evento?: string | null): boolean {
+  if (!evento) return false;
+  return EVENTOS_PAGOS.has(evento.toUpperCase());
+}
+
+/** Indica se um evento de webhook representa cancelamento/estorno. */
+export function eventoEhCancelado(evento?: string | null): boolean {
+  if (!evento) return false;
+  return EVENTOS_CANCELADOS.has(evento.toUpperCase());
 }
