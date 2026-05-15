@@ -6,8 +6,11 @@ import { createSupabaseAdmin } from "@/lib/supabase/admin";
 import { createSupabaseServer } from "@/lib/supabase/server";
 import { slugify } from "@/lib/utils";
 import {
+  diagnosticarBucketCatalogo,
   garantirBucketCatalogoPublico,
+  migrarUrlsPublicasParaSigned,
   uploadArquivoCatalogo,
+  type DiagnosticoBucket,
 } from "@/lib/storage-catalogo";
 
 async function ensureAdmin() {
@@ -33,14 +36,37 @@ function invalidarCatalogo() {
 }
 
 /**
- * Action pro admin reparar manualmente o bucket caso suspeite de problema
- * com fotos nao aparecendo. Forca verificacao sem cache.
+ * Action pro admin reparar manualmente o problema de fotos nao aparecendo:
+ *   1. Garante bucket existe e ta marcado como public (forca, sem cache).
+ *   2. Migra URLs antigas (public URLs do supabase) pra signed URLs com
+ *      validade de 10 anos — signed URLs funcionam em qualquer config.
+ *   3. Roda diagnostico final.
+ *   4. Invalida cache do site pra fotos novas aparecerem.
+ *
+ * Retorna o resultado completo pra UI mostrar.
  */
-export async function repararBucketImagens(): Promise<
-  { ok: true; publico: boolean } | { ok: false; erro: string }
-> {
+export async function repararBucketImagens(): Promise<{
+  ok: boolean;
+  bucket: { ok: boolean; publico?: boolean; erro?: string };
+  migracao: { produtosMigrados: number; categoriasMigradas: number; falhas: number; erros: string[] };
+  diagnostico: DiagnosticoBucket;
+}> {
   await ensureAdmin();
-  return garantirBucketCatalogoPublico(true);
+  const bucket = await garantirBucketCatalogoPublico(true);
+  const migracao = await migrarUrlsPublicasParaSigned();
+  const diagnostico = await diagnosticarBucketCatalogo();
+
+  // Invalida cache do site pra fotos novas aparecerem
+  revalidateTag("catalogo");
+  revalidatePath("/", "layout");
+  revalidatePath("/admin/produtos");
+  revalidatePath("/admin/categorias");
+
+  const ok =
+    bucket.ok &&
+    diagnostico.bucketExiste &&
+    migracao.falhas === 0;
+  return { ok, bucket, migracao, diagnostico };
 }
 
 export type ProdutoInput = {
