@@ -6,8 +6,10 @@ import {
   definirGatewayAtivo,
   definirMetodoAtivo,
   GATEWAYS_DISPONIVEIS,
+  limparCooldownGateway,
   obterGatewayAtivo,
   obterMetodosAtivos,
+  testarApenasGateway,
   type GatewayId,
   type MetodoPagamento,
 } from "@/lib/pagamento/gateway";
@@ -71,4 +73,90 @@ export async function alternarMetodo(
 
 export async function lerMetodosAtivos() {
   return obterMetodosAtivos();
+}
+
+// =====================================================================
+// Diagnostico de gateway — usado no painel pra debugar quando o admin
+// seleciona um gateway que esta caindo no failover.
+// =====================================================================
+
+const idsValidos = (): GatewayId[] => GATEWAYS_DISPONIVEIS.map((g) => g.id);
+
+export async function limparCooldown(
+  gateway: GatewayId,
+): Promise<{ ok: true } | { ok: false; erro: string }> {
+  if (!idsValidos().includes(gateway)) return { ok: false, erro: "Gateway invalido" };
+  const sb = createSupabaseServer();
+  const { data: userData } = await sb.auth.getUser();
+  if (!userData.user) return { ok: false, erro: "Nao autenticado" };
+  try {
+    limparCooldownGateway(gateway);
+    revalidatePath("/admin/pagamento");
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, erro: e instanceof Error ? e.message : "Erro" };
+  }
+}
+
+/**
+ * Faz uma chamada PIX de R$1 no gateway especificado pra ver se ele
+ * esta funcionando. Usa dados ficticios pra teste; o pedido NAO eh
+ * salvo na base de pedidos — eh chamada direta no SDK.
+ */
+export async function testarGateway(
+  gateway: GatewayId,
+): Promise<
+  | { ok: true; gateway: GatewayId; transactionId: string; durMs: number }
+  | { ok: false; erro: string; gateway: GatewayId }
+> {
+  if (!idsValidos().includes(gateway)) {
+    return { ok: false, erro: "Gateway invalido", gateway };
+  }
+  const sb = createSupabaseServer();
+  const { data: userData } = await sb.auth.getUser();
+  if (!userData.user) return { ok: false, erro: "Nao autenticado", gateway };
+
+  // Pra garantir que vamos testar O gateway escolhido (e nao cair no
+  // failover), limpamos o cooldown dele primeiro.
+  limparCooldownGateway(gateway);
+
+  const r = await testarApenasGateway(gateway, {
+    identifier: `TESTE-${Date.now()}`,
+    amount: 1,
+    client: {
+      name: "Teste Admin",
+      email: "teste@example.com",
+      phone: "11999999999",
+      document: "00000000191", // CPF de teste valido (Receita)
+    },
+    endereco: {
+      cep: "01310000",
+      street: "Av. Paulista",
+      number: "1000",
+      neighborhood: "Bela Vista",
+      city: "Sao Paulo",
+      state: "SP",
+    },
+    itens: [
+      {
+        id: "teste",
+        nome: "Teste de gateway (R$1)",
+        quantidade: 1,
+        precoUnitario: 1,
+      },
+    ],
+    metadata: { teste_diagnostico: true, por: userData.user.email ?? "?" },
+  });
+
+  revalidatePath("/admin/pagamento");
+
+  if (r.ok) {
+    return {
+      ok: true,
+      gateway: r.resposta.gateway,
+      transactionId: r.resposta.transactionId,
+      durMs: r.durMs,
+    };
+  }
+  return { ok: false, gateway, erro: r.erro };
 }

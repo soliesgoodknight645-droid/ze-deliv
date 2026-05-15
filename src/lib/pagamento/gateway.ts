@@ -111,6 +111,15 @@ export async function definirGatewayAtivo(gateway: GatewayId, atualizadoPor?: st
     );
   if (error) throw new Error(`Falha ao salvar gateway: ${error.message}`);
   cache = null;
+  // Quando o admin troca pra um gateway, limpa qualquer cooldown ativo dele —
+  // assim a primeira tentativa apos a troca eh REAL (em vez de cair direto pro
+  // failover por causa de uma falha antiga). O cooldown eh em memoria e por
+  // instancia, entao isso so afeta a instancia atual; outras instancias vao
+  // tentar tambem na proxima requisicao, e se ainda estiver quebrado vao
+  // marcar o cooldown delas. O `app_config` `gateway_status_last:hyzepay`
+  // tambem eh limpo pra a UI nao mostrar erro velho.
+  cooldown.delete(gateway);
+  await registrarResultadoNoBanco(gateway, { resetado: true, atualizadoPor });
 }
 
 // =====================================================================
@@ -232,12 +241,143 @@ function registrarFalhaGateway(g: GatewayId, motivo: string) {
   console.warn(
     `[gateway/circuit-breaker] ${g} em cooldown por ${COOLDOWN_MS / 1000}s (falha #${falhas}): ${motivo}`,
   );
+  // persiste no banco pro admin debugar (fire-and-forget)
+  void registrarResultadoNoBanco(g, {
+    sucesso: false,
+    motivo: motivo.slice(0, 500),
+    timestamp: new Date().toISOString(),
+    falhas,
+  });
 }
 
 function registrarSucessoGateway(g: GatewayId) {
   if (cooldown.has(g)) {
     console.log(`[gateway/circuit-breaker] ${g} se recuperou — saindo de cooldown`);
     cooldown.delete(g);
+  }
+  void registrarResultadoNoBanco(g, {
+    sucesso: true,
+    timestamp: new Date().toISOString(),
+  });
+}
+
+// =====================================================================
+// Persistencia do ultimo resultado de cada gateway
+//
+// Em memoria o cooldown eh por-instancia (cada serverless tem o seu mapa),
+// entao a UI do admin nao consegue ver o estado real. A solucao eh tambem
+// persistir o ultimo resultado em app_config — assim o admin enxerga "ok ha
+// 2min" ou "erro: X" independente da instancia.
+//
+// Chave: `gateway_status_last:<gatewayId>`
+// Valor: { sucesso, motivo?, timestamp, falhas? } ou { resetado: true, ... }
+// =====================================================================
+
+type ResultadoGateway = {
+  sucesso?: boolean;
+  motivo?: string;
+  timestamp?: string;
+  falhas?: number;
+  resetado?: boolean;
+  atualizadoPor?: string;
+};
+
+function chaveStatusGateway(g: GatewayId): string {
+  return `gateway_status_last:${g}`;
+}
+
+async function registrarResultadoNoBanco(g: GatewayId, dados: ResultadoGateway) {
+  try {
+    const sb = createSupabaseAdmin();
+    await sb.from("app_config").upsert(
+      {
+        chave: chaveStatusGateway(g),
+        valor: { ...dados, gateway: g },
+        atualizado_por: dados.atualizadoPor ?? null,
+      },
+      { onConflict: "chave" },
+    );
+  } catch (e) {
+    console.error(`[gateway/status] falha ao persistir status de ${g}`, e);
+  }
+}
+
+export type StatusUltimoGateway = {
+  gateway: GatewayId;
+  sucesso: boolean | null; // null = nunca tentou (ou foi resetado)
+  motivo: string | null;
+  timestampMs: number | null;
+  resetado: boolean;
+};
+
+/** Le do banco o ultimo resultado de cada gateway (pra admin debugar). */
+export async function lerStatusUltimoGateways(): Promise<StatusUltimoGateway[]> {
+  try {
+    const sb = createSupabaseAdmin();
+    const chaves = GATEWAY_IDS.map((g) => chaveStatusGateway(g));
+    const { data } = await sb
+      .from("app_config")
+      .select("chave, valor")
+      .in("chave", chaves);
+    const mapa = new Map<string, ResultadoGateway>(
+      (data ?? []).map((r) => [r.chave as string, (r.valor ?? {}) as ResultadoGateway]),
+    );
+    return GATEWAY_IDS.map((g) => {
+      const v = mapa.get(chaveStatusGateway(g));
+      return {
+        gateway: g,
+        sucesso: v?.resetado ? null : v?.sucesso ?? null,
+        motivo: v?.motivo ?? null,
+        timestampMs: v?.timestamp ? Date.parse(v.timestamp) : null,
+        resetado: v?.resetado ?? false,
+      } satisfies StatusUltimoGateway;
+    });
+  } catch (e) {
+    console.error("[gateway/status] falha ao ler status", e);
+    return GATEWAY_IDS.map((g) => ({
+      gateway: g,
+      sucesso: null,
+      motivo: null,
+      timestampMs: null,
+      resetado: false,
+    }));
+  }
+}
+
+/** Limpa o cooldown em memoria de um gateway especifico (so essa instancia). */
+export function limparCooldownGateway(g: GatewayId) {
+  cooldown.delete(g);
+  void registrarResultadoNoBanco(g, { resetado: true });
+}
+
+/**
+ * Tenta gerar um PIX de teste APENAS no gateway especificado, SEM failover.
+ * Usado pelo painel admin pra debugar gateways que estao caindo. Registra o
+ * resultado (sucesso/falha) no banco como qualquer outra tentativa.
+ */
+export async function testarApenasGateway(
+  gateway: GatewayId,
+  input: CriarPixUnificadoInput,
+): Promise<{ ok: true; resposta: CriarPixUnificadoResposta; durMs: number } | { ok: false; erro: string; durMs: number }> {
+  const t0 = Date.now();
+  try {
+    const resposta = await comTimeout(
+      tentarPixNoGateway(gateway, input),
+      TIMEOUT_GATEWAY_MS,
+      `gateway ${gateway} (teste)`,
+    );
+    const dur = Date.now() - t0;
+    registrarSucessoGateway(gateway);
+    return {
+      ok: true,
+      resposta: { ...resposta, tentativas: [{ gateway, sucesso: true, duracaoMs: dur }] },
+      durMs: dur,
+    };
+  } catch (e) {
+    const err = e instanceof Error ? e : new Error(String(e));
+    const dur = Date.now() - t0;
+    registrarFalhaGateway(gateway, err.message);
+    return { ok: false, erro: err.message, durMs: dur };
   }
 }
 

@@ -3,6 +3,7 @@ import Link from "next/link";
 import { BarChart3, CreditCard, LayoutGrid, LogOut, Package, Settings, ShieldCheck, ShoppingBag, UserCircle } from "lucide-react";
 import { createSupabaseServer } from "@/lib/supabase/server";
 import { createSupabaseAdmin } from "@/lib/supabase/admin";
+import { AdminAlertasNovoPedido } from "@/components/AdminAlertasNovoPedido";
 import { logout } from "../actions";
 
 export const dynamic = "force-dynamic";
@@ -92,6 +93,7 @@ export default async function AdminPainelLayout({ children }: { children: React.
         </div>
       </header>
       <div className="max-w-screen-lg mx-auto px-4 py-6">{children}</div>
+      <AdminAlertasNovoPedido />
     </div>
   );
 }

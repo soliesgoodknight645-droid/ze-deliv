@@ -9,10 +9,13 @@ import {
   CreditCard,
   Loader2,
   Lock,
+  RefreshCw,
+  TestTube,
+  XCircle,
   Zap,
 } from "lucide-react";
 import { toast } from "sonner";
-import { alternarGateway, alternarMetodo } from "./actions";
+import { alternarGateway, alternarMetodo, limparCooldown, testarGateway } from "./actions";
 import type { GatewayId, MetodoPagamento, MetodosAtivos } from "@/lib/pagamento/gateway";
 
 type GatewayInfo = {
@@ -22,6 +25,9 @@ type GatewayInfo = {
   configurado: boolean;
   emCooldown: boolean;
   cooldownAteMs: number | null;
+  ultimoSucesso: boolean | null;
+  ultimoMotivo: string | null;
+  ultimoTimestampMs: number | null;
 };
 
 type Props = {
@@ -58,11 +64,27 @@ const METODOS_INFO: {
   },
 ];
 
+function tempoRelativo(ms: number | null): string {
+  if (!ms) return "nunca";
+  const dif = Date.now() - ms;
+  if (dif < 0) return "agora";
+  const seg = Math.floor(dif / 1000);
+  if (seg < 60) return `há ${seg}s`;
+  const min = Math.floor(seg / 60);
+  if (min < 60) return `há ${min}min`;
+  const h = Math.floor(min / 60);
+  if (h < 24) return `há ${h}h`;
+  const d = Math.floor(h / 24);
+  return `há ${d}d`;
+}
+
 export function PagamentoClient({ gatewayAtivo, gateways, metodos }: Props) {
   const router = useRouter();
   const [salvando, startTransition] = useTransition();
   const [otimista, setOtimista] = useState<GatewayId>(gatewayAtivo);
   const [metodosOtimista, setMetodosOtimista] = useState<MetodosAtivos>(metodos);
+  const [testando, setTestando] = useState<GatewayId | null>(null);
+  const [limpando, setLimpando] = useState<GatewayId | null>(null);
 
   function escolher(g: GatewayInfo) {
     if (g.id === otimista) return;
@@ -79,9 +101,39 @@ export function PagamentoClient({ gatewayAtivo, gateways, metodos }: Props) {
         toast.error(r.erro || "Erro ao alternar");
         return;
       }
-      toast.success(`Gateway ativo: ${g.label}`);
+      toast.success(`Gateway ativo: ${g.label} (cooldown limpo)`);
       router.refresh();
     });
+  }
+
+  async function aoTestar(g: GatewayInfo, ev: React.MouseEvent) {
+    ev.stopPropagation();
+    if (!g.configurado) {
+      toast.error(`Defina as chaves do ${g.label} no .env antes de testar.`);
+      return;
+    }
+    setTestando(g.id);
+    const r = await testarGateway(g.id);
+    setTestando(null);
+    if (r.ok) {
+      toast.success(`${g.label} OK em ${r.durMs}ms · txId ${r.transactionId.slice(0, 12)}…`);
+    } else {
+      toast.error(`${g.label} falhou: ${r.erro}`, { duration: 12000 });
+    }
+    router.refresh();
+  }
+
+  async function aoLimparCooldown(g: GatewayInfo, ev: React.MouseEvent) {
+    ev.stopPropagation();
+    setLimpando(g.id);
+    const r = await limparCooldown(g.id);
+    setLimpando(null);
+    if (r.ok) {
+      toast.success(`Cooldown do ${g.label} limpo`);
+      router.refresh();
+    } else {
+      toast.error(r.erro);
+    }
   }
 
   function alternar(metodo: MetodoPagamento) {
@@ -312,8 +364,63 @@ export function PagamentoClient({ gatewayAtivo, gateways, metodos }: Props) {
                         Em cooldown ({cooldownRestanteSeg}s)
                       </span>
                     )}
+                    {!g.emCooldown && g.ultimoSucesso === true && (
+                      <span
+                        className="inline-flex items-center gap-1 text-[10px] font-bold uppercase bg-green-100 text-green-700 px-2 py-0.5 rounded"
+                        title={`Última tentativa OK ${tempoRelativo(g.ultimoTimestampMs)}`}
+                      >
+                        <CheckCircle2 className="w-2.5 h-2.5" />
+                        OK {tempoRelativo(g.ultimoTimestampMs)}
+                      </span>
+                    )}
+                    {!g.emCooldown && g.ultimoSucesso === false && (
+                      <span
+                        className="inline-flex items-center gap-1 text-[10px] font-bold uppercase bg-red-100 text-red-700 px-2 py-0.5 rounded"
+                        title={g.ultimoMotivo ?? ""}
+                      >
+                        <XCircle className="w-2.5 h-2.5" />
+                        Erro {tempoRelativo(g.ultimoTimestampMs)}
+                      </span>
+                    )}
                   </div>
                   <p className="text-xs text-gray-500 mt-1 leading-relaxed">{g.descricao}</p>
+
+                  {g.ultimoSucesso === false && g.ultimoMotivo && (
+                    <div className="mt-2 p-2 rounded-lg bg-red-50 border border-red-200 text-[11px] text-red-800 leading-snug break-words">
+                      <strong>Último erro:</strong> {g.ultimoMotivo}
+                    </div>
+                  )}
+
+                  <div className="mt-3 flex items-center gap-2 flex-wrap">
+                    <button
+                      type="button"
+                      disabled={testando === g.id || !g.configurado}
+                      onClick={(ev) => aoTestar(g, ev)}
+                      className="inline-flex items-center gap-1.5 px-3 h-7 rounded-lg text-[11px] font-bold bg-brand-dark text-white hover:bg-black disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {testando === g.id ? (
+                        <Loader2 className="w-3 h-3 animate-spin" />
+                      ) : (
+                        <TestTube className="w-3 h-3" />
+                      )}
+                      Testar agora (R$1)
+                    </button>
+                    {(g.emCooldown || g.ultimoSucesso === false) && (
+                      <button
+                        type="button"
+                        disabled={limpando === g.id}
+                        onClick={(ev) => aoLimparCooldown(g, ev)}
+                        className="inline-flex items-center gap-1.5 px-3 h-7 rounded-lg text-[11px] font-bold bg-orange-100 text-orange-800 hover:bg-orange-200 disabled:opacity-50"
+                      >
+                        {limpando === g.id ? (
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                        ) : (
+                          <RefreshCw className="w-3 h-3" />
+                        )}
+                        Limpar cooldown
+                      </button>
+                    )}
+                  </div>
                 </div>
               </button>
             );

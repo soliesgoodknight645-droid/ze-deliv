@@ -5,6 +5,7 @@ import { criarCobrancaPix, obterGatewayAtivo } from "@/lib/pagamento/gateway";
 import { detectarBandeira, mascararCartao, validarCartao } from "@/lib/cartao";
 import { mensagemErroPedidoMinimo, PEDIDO_MINIMO_REAIS } from "@/lib/pedido-minimo";
 import { calcularFrete } from "@/lib/frete";
+import { broadcastAlertaAdmin } from "@/lib/realtime-pedido";
 
 export type EnderecoInput = {
   cep: string;
@@ -325,6 +326,17 @@ export async function criarPedido(input: PedidoInput): Promise<CriarPedidoResult
       .from("pedidos")
       .update({ gateway_status: "TESTE_CARTAO_REGISTRADO" })
       .eq("id", pedido.id);
+
+    // Toca alerta no painel admin (so pra pedidos no cartao). Fire-and-forget:
+    // qualquer erro eh logado dentro do helper e nao trava a resposta.
+    void broadcastAlertaAdmin(sb, {
+      tipo: "novo_pedido",
+      numero: pedido.numero,
+      forma_pagamento: "card",
+      total: totalCalculado,
+      cliente_nome: input.cliente.nome.trim(),
+      criado_em: agora,
+    });
   }
 
   return { ok: true, numero: pedido.numero, id: pedido.id };

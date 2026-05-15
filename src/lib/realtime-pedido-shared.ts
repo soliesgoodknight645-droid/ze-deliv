@@ -11,3 +11,18 @@ export type PedidoStatusBroadcast = {
   paid_at?: string | null;
   gateway_status?: string | null;
 };
+
+/**
+ * Canal global ouvido pelo painel admin pra alertas em tempo real (toca som
+ * quando entra pedido com cartão, etc.). Independente de pedido especifico.
+ */
+export const CANAL_ADMIN_ALERTAS = "admin:alertas";
+
+export type AdminAlertaNovoPedido = {
+  tipo: "novo_pedido";
+  numero: string;
+  forma_pagamento: "pix" | "card" | "cash" | string;
+  total: number;
+  cliente_nome?: string | null;
+  criado_em: string;
+};

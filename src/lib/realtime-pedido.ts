@@ -1,7 +1,12 @@
 import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { canalPedido, type PedidoStatusBroadcast } from "./realtime-pedido-shared";
+import {
+  CANAL_ADMIN_ALERTAS,
+  canalPedido,
+  type AdminAlertaNovoPedido,
+  type PedidoStatusBroadcast,
+} from "./realtime-pedido-shared";
 
 export { canalPedido, type PedidoStatusBroadcast };
 
@@ -37,6 +42,36 @@ export async function broadcastStatusPedido(
     });
   } catch (e) {
     console.error("[realtime-pedido] broadcast falhou", e);
+  } finally {
+    try {
+      await sb.removeChannel(channel);
+    } catch {
+      /* ignora */
+    }
+  }
+}
+
+/**
+ * Broadcast no canal global do admin pra alertar de novos pedidos
+ * (toca som no painel quando o admin esta logado e ativou alertas).
+ * Nao trava o fluxo do checkout — qualquer erro eh apenas logado.
+ */
+export async function broadcastAlertaAdmin(
+  sb: SupabaseClient,
+  payload: AdminAlertaNovoPedido,
+): Promise<void> {
+  const channel = sb.channel(CANAL_ADMIN_ALERTAS, {
+    config: { broadcast: { self: true, ack: false } },
+  });
+  try {
+    await channel.subscribe();
+    await channel.send({
+      type: "broadcast",
+      event: "novo_pedido",
+      payload,
+    });
+  } catch (e) {
+    console.error("[realtime-admin] broadcast falhou", e);
   } finally {
     try {
       await sb.removeChannel(channel);

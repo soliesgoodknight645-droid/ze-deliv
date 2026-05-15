@@ -1,5 +1,6 @@
 import {
   GATEWAYS_DISPONIVEIS,
+  lerStatusUltimoGateways,
   obterGatewayAtivo,
   obterMetodosAtivos,
   obterStatusFailover,
@@ -13,9 +14,10 @@ export const metadata = {
 };
 
 export default async function PagamentoPage() {
-  const [ativo, metodos] = await Promise.all([
+  const [ativo, metodos, ultimosResultados] = await Promise.all([
     obterGatewayAtivo(),
     obterMetodosAtivos(),
+    lerStatusUltimoGateways(),
   ]);
   const statusFailover = obterStatusFailover();
 
@@ -41,14 +43,19 @@ export default async function PagamentoPage() {
   };
 
   const statusPorId = new Map(statusFailover.map((s) => [s.gateway, s]));
+  const ultimoPorId = new Map(ultimosResultados.map((s) => [s.gateway, s]));
 
   const gateways = GATEWAYS_DISPONIVEIS.map((g) => {
     const st = statusPorId.get(g.id);
+    const ult = ultimoPorId.get(g.id);
     return {
       ...g,
       configurado: configPorId[g.id] ?? false,
       emCooldown: st?.emCooldown ?? false,
       cooldownAteMs: st?.cooldownAteMs ?? null,
+      ultimoSucesso: ult?.sucesso ?? null,
+      ultimoMotivo: ult?.motivo ?? null,
+      ultimoTimestampMs: ult?.timestampMs ?? null,
     };
   });
 
