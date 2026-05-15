@@ -35,15 +35,15 @@ export function RepararBucketButton() {
       const r = await repararBucketImagens();
       setResultado(r);
       setAberto(true);
-      if (r.ok) {
-        const total = r.migracao.produtosMigrados + r.migracao.categoriasMigradas;
-        if (total > 0) {
-          toast.success(
-            `Reparado: ${total} URL${total > 1 ? "s" : ""} migrada${total > 1 ? "s" : ""}. Veja detalhes →`,
-          );
-        } else {
-          toast.success("Bucket OK. Veja diagnóstico →");
-        }
+      const totalRegen = r.reparo.produtosRegenerados + r.reparo.categoriasRegeneradas;
+      const totalNul = r.reparo.produtosNulados + r.reparo.categoriasNuladas;
+      if (totalRegen > 0 || totalNul > 0) {
+        toast.success(
+          `${totalRegen} URLs regeneradas, ${totalNul} limpas pra usar foto local. Veja detalhes →`,
+          { duration: 8000 },
+        );
+      } else if (r.ok) {
+        toast.success("Tudo OK — todas as URLs do banco funcionam. Veja diagnóstico →");
       } else {
         toast.error("Reparo encontrou problemas. Veja detalhes →", { duration: 8000 });
       }
@@ -123,48 +123,79 @@ function PainelDiagnostico({ r }: { r: Resultado }) {
       <hr className="my-2 border-gray-100" />
 
       <p className="font-bold text-brand-dark text-[11px] uppercase tracking-wide">
-        Migração
+        Reparo das URLs no banco
       </p>
       <p>
-        Produtos migrados:{" "}
-        <strong className="text-brand-dark">{r.migracao.produtosMigrados}</strong>
+        Produtos OK:{" "}
+        <strong className="text-green-700">{r.reparo.produtosValidados}</strong> ·
+        regeneradas: <strong className="text-brand-dark">{r.reparo.produtosRegenerados}</strong>{" "}
+        · limpas (volta foto local):{" "}
+        <strong className="text-orange-700">{r.reparo.produtosNulados}</strong>
       </p>
       <p>
-        Categorias migradas:{" "}
-        <strong className="text-brand-dark">{r.migracao.categoriasMigradas}</strong>
+        Categorias OK:{" "}
+        <strong className="text-green-700">{r.reparo.categoriasValidadas}</strong> ·
+        regeneradas: <strong className="text-brand-dark">{r.reparo.categoriasRegeneradas}</strong>{" "}
+        · limpas:{" "}
+        <strong className="text-orange-700">{r.reparo.categoriasNuladas}</strong>
       </p>
-      {r.migracao.falhas > 0 && (
-        <p className="text-red-700">Falhas: {r.migracao.falhas}</p>
+      {r.reparo.falhas > 0 && (
+        <p className="text-red-700">Falhas: {r.reparo.falhas}</p>
       )}
 
-      {(d.produtosComUrlAntiga > 0 || d.categoriasComUrlAntiga > 0) && (
-        <p className="text-orange-700">
-          Ainda restam {d.produtosComUrlAntiga + d.categoriasComUrlAntiga} URLs antigas no banco.
-        </p>
+      {r.reparo.exemplosNulados.length > 0 && (
+        <details className="text-[10px] text-gray-500 mt-1">
+          <summary className="cursor-pointer hover:text-brand-dark">
+            Exemplos limpos ({r.reparo.exemplosNulados.length})
+          </summary>
+          <ul className="mt-1 space-y-0.5 pl-2 break-words">
+            {r.reparo.exemplosNulados.map((e, i) => (
+              <li key={i}>· {e}</li>
+            ))}
+          </ul>
+        </details>
       )}
 
-      {(d.erros.length > 0 || r.migracao.erros.length > 0) && (
+      {d.ultimasUrlsBanco.length > 0 && (
         <>
           <hr className="my-2 border-gray-100" />
-          <p className="font-bold text-red-700 text-[11px] uppercase tracking-wide">
-            Erros
+          <p className="font-bold text-brand-dark text-[11px] uppercase tracking-wide">
+            Últimas URLs no banco
           </p>
-          <ul className="space-y-1 max-h-32 overflow-auto">
-            {[...d.erros, ...r.migracao.erros].map((e, i) => (
-              <li key={i} className="text-red-700 break-words">
-                · {e}
+          <ul className="space-y-1.5 max-h-40 overflow-auto">
+            {d.ultimasUrlsBanco.map((u, i) => (
+              <li key={i} className="text-[10px] border-l-2 pl-2 border-gray-200">
+                <div className="flex items-center gap-1.5">
+                  {u.funciona ? (
+                    <CheckCircle2 className="w-3 h-3 text-green-600 flex-shrink-0" />
+                  ) : (
+                    <XCircle className="w-3 h-3 text-red-600 flex-shrink-0" />
+                  )}
+                  <strong className="text-brand-dark truncate">{u.slug}</strong>
+                  {u.ehDoBucket && (
+                    <span className="text-gray-400">(supabase)</span>
+                  )}
+                </div>
+                <div className="text-gray-500 break-all pl-4">{u.url}</div>
               </li>
             ))}
           </ul>
         </>
       )}
 
-      {d.amostraUrlPublica && (
+      {(d.erros.length > 0 || r.reparo.erros.length > 0) && (
         <>
           <hr className="my-2 border-gray-100" />
-          <p className="text-[10px] text-gray-400 break-all">
-            URL teste: {d.amostraUrlPublica}
+          <p className="font-bold text-red-700 text-[11px] uppercase tracking-wide">
+            Erros
           </p>
+          <ul className="space-y-1 max-h-32 overflow-auto">
+            {[...d.erros, ...r.reparo.erros].map((e, i) => (
+              <li key={i} className="text-red-700 break-words">
+                · {e}
+              </li>
+            ))}
+          </ul>
         </>
       )}
     </div>

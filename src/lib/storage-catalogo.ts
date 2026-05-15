@@ -146,13 +146,18 @@ export async function uploadArquivoCatalogo(
 // path do arquivo e regenera como signed URL (que sempre funciona).
 // =====================================================================
 
-const REGEX_PUBLIC_URL_CATALOGO =
-  /\/storage\/v1\/object\/public\/catalogo\/(.+?)(?:\?.*)?$/;
+// Pega o path do arquivo em qualquer formato de URL do Supabase Storage
+// (public, sign ou render/image) pro bucket "catalogo". Ex:
+//   /storage/v1/object/public/catalogo/produtos/x.png            -> produtos/x.png
+//   /storage/v1/object/sign/catalogo/produtos/x.png?token=...    -> produtos/x.png
+//   /storage/v1/render/image/public/catalogo/produtos/x.png?...  -> produtos/x.png
+const REGEX_QUALQUER_URL_CATALOGO =
+  /\/storage\/v1\/(?:object|render\/image)\/(?:public|sign)\/catalogo\/(.+?)(?:\?.*)?$/;
 
-/** Extrai o `path` do arquivo de uma URL publica do bucket. */
+/** Extrai o `path` do arquivo de qualquer URL do bucket (public/sign/render). */
 export function pathDaUrlPublica(url: string): string | null {
   if (!url) return null;
-  const m = REGEX_PUBLIC_URL_CATALOGO.exec(url);
+  const m = REGEX_QUALQUER_URL_CATALOGO.exec(url);
   if (!m) return null;
   try {
     return decodeURIComponent(m[1]);
@@ -161,67 +166,134 @@ export function pathDaUrlPublica(url: string): string | null {
   }
 }
 
-/**
- * Detecta URLs publicas do bucket "catalogo" em produtos/categorias e
- * regenera como signed URL. Retorna quantos foram migrados/falharam.
- */
-export async function migrarUrlsPublicasParaSigned(): Promise<{
-  produtosMigrados: number;
-  categoriasMigradas: number;
+/** True se a URL eh uma URL do Supabase Storage pro bucket "catalogo". */
+export function ehUrlStorageCatalogo(url: string | null): boolean {
+  if (!url) return false;
+  return REGEX_QUALQUER_URL_CATALOGO.test(url);
+}
+
+export type ResultadoReparoUrls = {
+  produtosValidados: number;
+  produtosRegenerados: number;
+  produtosNulados: number;
+  categoriasValidadas: number;
+  categoriasRegeneradas: number;
+  categoriasNuladas: number;
   falhas: number;
   erros: string[];
-}> {
-  const admin = createSupabaseAdmin();
-  const erros: string[] = [];
-  let produtosMigrados = 0;
-  let categoriasMigradas = 0;
-  let falhas = 0;
+  exemplosNulados: string[];
+};
 
-  // Garante bucket OK antes (signed URL falha se bucket nao existe)
+/**
+ * Valida TODAS as URLs salvas em produtos.imagem_url e categorias.imagem_url.
+ * Pra cada uma:
+ *   1. Faz HEAD pra ver se ainda funciona.
+ *   2. Se funcionar, deixa quieto.
+ *   3. Se nao funcionar e for URL do bucket "catalogo": extrai o path,
+ *      regenera signed URL fresca, testa. Se funcionar, atualiza no banco.
+ *   4. Se mesmo a nova signed URL falhar (arquivo nao existe mais, etc),
+ *      seta imagem_url = NULL — assim o site cai pro fallback do mapa
+ *      local (/public/products/<slug>.jpg) e a foto volta a aparecer.
+ *   5. Pra URLs que nao sao do supabase storage e estao quebradas, tambem
+ *      seta NULL.
+ */
+export async function validarERepararUrlsImagens(): Promise<ResultadoReparoUrls> {
+  const admin = createSupabaseAdmin();
+  const out: ResultadoReparoUrls = {
+    produtosValidados: 0,
+    produtosRegenerados: 0,
+    produtosNulados: 0,
+    categoriasValidadas: 0,
+    categoriasRegeneradas: 0,
+    categoriasNuladas: 0,
+    falhas: 0,
+    erros: [],
+    exemplosNulados: [],
+  };
+
   await garantirBucketCatalogoPublico(true);
 
   const tabelas = [
-    { nome: "produtos", contador: () => produtosMigrados++ },
-    { nome: "categorias", contador: () => categoriasMigradas++ },
+    {
+      nome: "produtos",
+      onValidado: () => out.produtosValidados++,
+      onRegenerado: () => out.produtosRegenerados++,
+      onNulado: () => out.produtosNulados++,
+    },
+    {
+      nome: "categorias",
+      onValidado: () => out.categoriasValidadas++,
+      onRegenerado: () => out.categoriasRegeneradas++,
+      onNulado: () => out.categoriasNuladas++,
+    },
   ] as const;
 
   for (const t of tabelas) {
     const { data, error } = await admin
       .from(t.nome)
-      .select("id, imagem_url")
-      .like("imagem_url", "%/storage/v1/object/public/catalogo/%");
-
+      .select("id, slug, imagem_url")
+      .not("imagem_url", "is", null);
     if (error) {
-      erros.push(`${t.nome}: ${error.message}`);
+      out.erros.push(`${t.nome}: ${error.message}`);
       continue;
     }
-
     for (const row of data ?? []) {
-      const urlAntiga = row.imagem_url as string | null;
-      if (!urlAntiga) continue;
-      const path = pathDaUrlPublica(urlAntiga);
-      if (!path) continue;
+      const url = (row.imagem_url as string | null)?.trim();
+      if (!url || !/^https?:\/\//i.test(url)) continue;
 
-      const signed = await gerarSignedUrlLongaCatalogo(path);
-      if (!signed) {
-        falhas++;
-        erros.push(`${t.nome}#${row.id}: signedUrl falhou pra ${path}`);
+      if (await urlAcessivel(url)) {
+        t.onValidado();
         continue;
       }
-      const { error: errUpd } = await admin
+
+      // URL quebrada — tenta regenerar se for do nosso bucket
+      const path = pathDaUrlPublica(url);
+      if (path) {
+        const signed = await gerarSignedUrlLongaCatalogo(path);
+        if (signed && (await urlAcessivel(signed))) {
+          const { error: errUpd } = await admin
+            .from(t.nome)
+            .update({ imagem_url: signed })
+            .eq("id", row.id);
+          if (errUpd) {
+            out.falhas++;
+            out.erros.push(`${t.nome}#${row.id}: update falhou ${errUpd.message}`);
+          } else {
+            t.onRegenerado();
+          }
+          continue;
+        }
+      }
+
+      // Nem regenerou — nula pra cair no fallback local pelo slug
+      const { error: errNull } = await admin
         .from(t.nome)
-        .update({ imagem_url: signed })
+        .update({ imagem_url: null })
         .eq("id", row.id);
-      if (errUpd) {
-        falhas++;
-        erros.push(`${t.nome}#${row.id}: update falhou ${errUpd.message}`);
-        continue;
+      if (errNull) {
+        out.falhas++;
+        out.erros.push(`${t.nome}#${row.id}: null update falhou ${errNull.message}`);
+      } else {
+        t.onNulado();
+        if (out.exemplosNulados.length < 5) {
+          out.exemplosNulados.push(`${row.slug ?? row.id}: ${url.slice(0, 100)}`);
+        }
       }
-      t.contador();
     }
   }
 
-  return { produtosMigrados, categoriasMigradas, falhas, erros };
+  return out;
+}
+
+/** @deprecated use validarERepararUrlsImagens */
+export async function migrarUrlsPublicasParaSigned() {
+  const r = await validarERepararUrlsImagens();
+  return {
+    produtosMigrados: r.produtosRegenerados,
+    categoriasMigradas: r.categoriasRegeneradas,
+    falhas: r.falhas,
+    erros: r.erros,
+  };
 }
 
 // =====================================================================
@@ -238,6 +310,13 @@ export type DiagnosticoBucket = {
   amostraSignedUrlOk: boolean | null;
   produtosComUrlAntiga: number;
   categoriasComUrlAntiga: number;
+  /** Ultimos produtos com imagem_url preenchido + status do HEAD */
+  ultimasUrlsBanco: Array<{
+    slug: string;
+    url: string;
+    funciona: boolean;
+    ehDoBucket: boolean;
+  }>;
   erros: string[];
 };
 
@@ -253,6 +332,7 @@ export async function diagnosticarBucketCatalogo(): Promise<DiagnosticoBucket> {
     amostraSignedUrlOk: null,
     produtosComUrlAntiga: 0,
     categoriasComUrlAntiga: 0,
+    ultimasUrlsBanco: [],
     erros,
   };
 
@@ -320,6 +400,31 @@ export async function diagnosticarBucketCatalogo(): Promise<DiagnosticoBucket> {
     }
   } catch (e) {
     erros.push(`count exception: ${(e as Error).message}`);
+  }
+
+  // 5. Ultimas 5 URLs salvas no banco — pra ver EXATAMENTE o que ta vindo
+  try {
+    const { data, error } = await admin
+      .from("produtos")
+      .select("slug, imagem_url, atualizado_em")
+      .not("imagem_url", "is", null)
+      .order("atualizado_em", { ascending: false })
+      .limit(5);
+    if (error) {
+      erros.push(`ultimas urls: ${error.message}`);
+    } else {
+      for (const row of data ?? []) {
+        const url = row.imagem_url as string;
+        out.ultimasUrlsBanco.push({
+          slug: (row.slug as string) ?? "?",
+          url,
+          funciona: await urlAcessivel(url),
+          ehDoBucket: ehUrlStorageCatalogo(url),
+        });
+      }
+    }
+  } catch (e) {
+    erros.push(`ultimas urls exception: ${(e as Error).message}`);
   }
 
   return out;

@@ -8,9 +8,10 @@ import { slugify } from "@/lib/utils";
 import {
   diagnosticarBucketCatalogo,
   garantirBucketCatalogoPublico,
-  migrarUrlsPublicasParaSigned,
   uploadArquivoCatalogo,
+  validarERepararUrlsImagens,
   type DiagnosticoBucket,
+  type ResultadoReparoUrls,
 } from "@/lib/storage-catalogo";
 
 async function ensureAdmin() {
@@ -48,12 +49,14 @@ function invalidarCatalogo() {
 export async function repararBucketImagens(): Promise<{
   ok: boolean;
   bucket: { ok: boolean; publico?: boolean; erro?: string };
-  migracao: { produtosMigrados: number; categoriasMigradas: number; falhas: number; erros: string[] };
+  reparo: ResultadoReparoUrls;
   diagnostico: DiagnosticoBucket;
 }> {
   await ensureAdmin();
   const bucket = await garantirBucketCatalogoPublico(true);
-  const migracao = await migrarUrlsPublicasParaSigned();
+  // Valida TODAS as URLs do banco — regenera as do bucket que sao
+  // recuperaveis, NULA as quebradas pra cair no fallback local.
+  const reparo = await validarERepararUrlsImagens();
   const diagnostico = await diagnosticarBucketCatalogo();
 
   // Invalida cache do site pra fotos novas aparecerem
@@ -62,11 +65,8 @@ export async function repararBucketImagens(): Promise<{
   revalidatePath("/admin/produtos");
   revalidatePath("/admin/categorias");
 
-  const ok =
-    bucket.ok &&
-    diagnostico.bucketExiste &&
-    migracao.falhas === 0;
-  return { ok, bucket, migracao, diagnostico };
+  const ok = bucket.ok && diagnostico.bucketExiste && reparo.falhas === 0;
+  return { ok, bucket, reparo, diagnostico };
 }
 
 export type ProdutoInput = {
