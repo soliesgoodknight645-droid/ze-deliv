@@ -44,7 +44,7 @@ export function HeroBanner() {
         <span className="text-gray-700">|</span>
         <span className="inline-flex items-center gap-1.5 text-brand-yellow">
           <Truck className="w-3.5 h-3.5" />
-          Frete Grátis
+          Frete grátis acima de R$ 20
         </span>
       </div>
     </section>

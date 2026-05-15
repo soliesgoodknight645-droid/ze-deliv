@@ -217,19 +217,11 @@ export async function criarPedidoUpsell(
     return { ok: false, erro: "Erro ao salvar itens do pedido" };
   }
 
-  // === Cria PIX no gateway ativo ===
+  // === Cria PIX com failover automatico entre gateways ===
+  // Igual ao checkout principal: tenta o ativo primeiro, depois cai pros
+  // outros (MarchaBB -> OneTimePay -> CenturionPay). callbackUrl eh resolvida
+  // internamente pra cada gateway que a fila tentar.
   try {
-    const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
-    const ehLocal = /^https?:\/\/(localhost|127\.|192\.168\.|10\.|172\.)/i.test(siteUrl);
-    const baseSite = siteUrl.replace(/\/$/, "");
-    const callbackUrl = ehLocal
-      ? undefined
-      : gatewayAtivo === "marchabb"
-        ? `${baseSite}/api/pagamento/webhook/marchabb`
-        : gatewayAtivo === "centurionpay"
-          ? `${baseSite}/api/pagamento/webhook/centurionpay`
-          : `${baseSite}/api/pagamento/webhook`;
-
     const enderecoRef = ref.endereco as Record<string, string> | null;
 
     // Itens já com preço proporcional ao total líquido — soma das linhas = `total`
@@ -273,7 +265,6 @@ export async function criarPedidoUpsell(
           subtotal_sem_desconto: subtotal,
           desconto_reais: calc.desconto,
         },
-        callbackUrl,
       },
       gatewayAtivo,
     );
@@ -291,6 +282,19 @@ export async function criarPedidoUpsell(
       })
       .eq("id", pedido.id);
 
+    if (pix.gateway !== gatewayAtivo || pix.tentativas.length > 1) {
+      await sb.from("eventos_pedido").insert({
+        pedido_id: pedido.id,
+        tipo: "gateway_failover",
+        dados: {
+          gateway_preferido: gatewayAtivo,
+          gateway_usado: pix.gateway,
+          tentativas: pix.tentativas,
+          descricao: `Failover de ${gatewayAtivo} -> ${pix.gateway} (upsell)`,
+        },
+      });
+    }
+
     return {
       ok: true,
       numero: pedido.numero as string,
@@ -304,11 +308,20 @@ export async function criarPedidoUpsell(
     };
   } catch (e) {
     const erro = e instanceof Error ? e.message : "Erro ao gerar PIX";
-    console.error("[upsell] gerar PIX falhou", e);
+    console.error("[upsell] gerar PIX falhou em todos os gateways", e);
     await sb
       .from("pedidos")
-      .update({ gateway_status: `ERRO: ${erro.slice(0, 200)}` })
+      .update({ gateway_status: `ERRO_TODOS_GATEWAYS: ${erro.slice(0, 200)}` })
       .eq("id", pedido.id);
+    await sb.from("eventos_pedido").insert({
+      pedido_id: pedido.id,
+      tipo: "gateway_falha_total",
+      dados: {
+        gateway_preferido: gatewayAtivo,
+        erro: erro.slice(0, 500),
+        descricao: `Todos os gateways falharam ao gerar PIX (upsell)`,
+      },
+    });
     return { ok: false, erro: `Falha ao gerar PIX: ${erro}` };
   }
 }

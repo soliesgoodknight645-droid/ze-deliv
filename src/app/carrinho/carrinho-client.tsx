@@ -9,6 +9,12 @@ import { Header } from "@/components/Header";
 import { Footer } from "@/components/Footer";
 import { useCart } from "@/contexts/CartContext";
 import { mensagemErroPedidoMinimo, PEDIDO_MINIMO_REAIS, subtotalAbaixoDoMinimo } from "@/lib/pedido-minimo";
+import {
+  calcularFrete,
+  faltaParaFreteGratis,
+  LIMITE_FRETE_GRATIS,
+  temFreteGratis,
+} from "@/lib/frete";
 import { fmtPreco } from "@/lib/utils";
 
 export function CarrinhoClient() {
@@ -102,12 +108,29 @@ export function CarrinhoClient() {
               </div>
               <div className="flex justify-between text-sm">
                 <span className="text-gray-500">Entrega</span>
-                <span className="font-semibold text-brand-green">Grátis</span>
+                {temFreteGratis(totalValor) ? (
+                  <span className="font-semibold text-brand-green">Grátis</span>
+                ) : (
+                  <span className="font-semibold text-brand-dark">
+                    {fmtPreco(calcularFrete(totalValor))}
+                  </span>
+                )}
               </div>
               <div className="flex justify-between items-center pt-2 border-t border-gray-100">
                 <span className="font-bold text-brand-dark">Total</span>
-                <span className="font-extrabold text-lg text-brand-red">{fmtPreco(totalValor)}</span>
+                <span className="font-extrabold text-lg text-brand-red">
+                  {fmtPreco(totalValor + calcularFrete(totalValor))}
+                </span>
               </div>
+              {!subtotalAbaixoDoMinimo(totalValor) && !temFreteGratis(totalValor) && (
+                <p className="text-xs text-amber-800 bg-amber-50 rounded-xl px-3 py-2 border border-amber-100">
+                  Falta{" "}
+                  <span className="font-bold">
+                    {fmtPreco(faltaParaFreteGratis(totalValor))}
+                  </span>{" "}
+                  pra ganhar frete grátis (mínimo {fmtPreco(LIMITE_FRETE_GRATIS)}).
+                </p>
+              )}
               {subtotalAbaixoDoMinimo(totalValor) && (
                 <p className="text-xs text-amber-800 bg-amber-50 rounded-xl px-3 py-2 border border-amber-100">
                   Pedido mínimo {fmtPreco(PEDIDO_MINIMO_REAIS)}. Faltam{" "}

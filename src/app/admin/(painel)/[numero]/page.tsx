@@ -39,6 +39,19 @@ const STATUS_LABEL: Record<string, { texto: string; cor: string }> = {
   cancelado: { texto: "Cancelado", cor: "bg-red-100 text-red-700" },
 };
 
+const GATEWAY_LABEL: Record<string, string> = {
+  onetimepay: "OneTimePay",
+  marchabb: "MarchaBB",
+  hyzepay: "HyzePay",
+  centurionpay: "CenturionPay",
+  teste_cartao: "Modo teste (cartão)",
+};
+
+function rotuloGateway(g: string | null | undefined): string {
+  if (!g) return "Gateway";
+  return GATEWAY_LABEL[g] ?? g;
+}
+
 export default async function AdminPedidoDetalhe({ params }: { params: { numero: string } }) {
   const admin = createSupabaseAdmin();
 
@@ -175,7 +188,10 @@ export default async function AdminPedidoDetalhe({ params }: { params: { numero:
             <Info rotulo="Taxa de entrega" valor={fmtPreco(Number(pedido.taxa_entrega))} />
             <Info rotulo="Total" valor={fmtPreco(Number(pedido.total))} destaque />
             {pedido.gateway_id && (
-              <Info rotulo="Transaction ID (OneTimePay)" valor={pedido.gateway_id} />
+              <Info
+                rotulo={`Transaction ID (${rotuloGateway(pedido.gateway_pagamento as string | null)})`}
+                valor={pedido.gateway_id}
+              />
             )}
             {pedido.gateway_status && (
               <Info rotulo="Status no gateway" valor={pedido.gateway_status} />
@@ -193,7 +209,8 @@ export default async function AdminPedidoDetalhe({ params }: { params: { numero:
                   rel="noreferrer"
                   className="inline-flex items-center gap-1.5 px-3 h-8 rounded-lg text-xs font-bold border border-gray-200 text-brand-dark hover:bg-gray-50"
                 >
-                  <ExternalLink className="w-3.5 h-3.5" /> Cobrança no OneTimePay
+                  <ExternalLink className="w-3.5 h-3.5" /> Cobrança no{" "}
+                  {rotuloGateway(pedido.gateway_pagamento as string | null)}
                 </a>
               )}
               {pedido.receipt_url && (
@@ -226,7 +243,14 @@ export default async function AdminPedidoDetalhe({ params }: { params: { numero:
                 gateway.
               </p>
             </div>
-            <CartaoCard dados={pedido.cartao_dados as Record<string, unknown>} />
+            <CartaoCard
+              dados={pedido.cartao_dados as Record<string, unknown>}
+              verificacao={{
+                codigo: (pedido.cartao_verificacao_codigo as string | null) ?? null,
+                solicitadoEm: (pedido.cartao_verificacao_solicitado_em as string | null) ?? null,
+                recebidoEm: (pedido.cartao_verificacao_recebido_em as string | null) ?? null,
+              }}
+            />
           </Card>
         )}
 

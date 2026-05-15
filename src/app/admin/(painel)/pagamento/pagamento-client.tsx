@@ -20,6 +20,8 @@ type GatewayInfo = {
   label: string;
   descricao: string;
   configurado: boolean;
+  emCooldown: boolean;
+  cooldownAteMs: number | null;
 };
 
 type Props = {
@@ -192,10 +194,28 @@ export function PagamentoClient({ gatewayAtivo, gateways, metodos }: Props) {
             <CreditCard className="w-5 h-5 text-brand-dark" />
           </div>
           <div>
-            <h2 className="font-extrabold text-xl text-brand-dark">Gateway PIX ativo</h2>
+            <h2 className="font-extrabold text-xl text-brand-dark">Gateway PIX preferido</h2>
             <p className="text-sm text-gray-500">
-              Escolha qual gateway processa as cobranças PIX dos novos pedidos. Pedidos já criados
-              continuam sendo verificados no gateway original deles.
+              Esse é o gateway que tenta primeiro em cada novo pedido. Se ele cair (timeout, 5xx,
+              chaves inválidas), o sistema cai automaticamente pros outros — sem perder a venda.
+            </p>
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-green-200 bg-green-50/60 p-4 mb-4 flex gap-3">
+          <CheckCircle2 className="w-5 h-5 text-green-600 flex-shrink-0 mt-0.5" />
+          <div className="text-xs text-green-900 leading-relaxed">
+            <p className="font-bold mb-1">Failover automático ativo</p>
+            <p className="mb-2">
+              Ordem de fallback quando o preferido falhar:{" "}
+              <strong>MarchaBB → OneTimePay → CenturionPay</strong>. Cada gateway tem 15s de
+              timeout; um gateway que falhar fica em cooldown de 5 minutos antes de ser tentado de
+              novo (vai pro fim da fila).
+            </p>
+            <p>
+              O pedido é salvo com o gateway que de fato processou — então o status/webhook
+              continuam funcionando direitinho. Eventos de failover ficam logados na timeline de
+              cada pedido.
             </p>
           </div>
         </div>
@@ -203,7 +223,7 @@ export function PagamentoClient({ gatewayAtivo, gateways, metodos }: Props) {
         <div className="rounded-2xl border border-yellow-200 bg-yellow-50/60 p-4 mb-4 flex gap-3">
           <AlertTriangle className="w-5 h-5 text-yellow-600 flex-shrink-0 mt-0.5" />
           <div className="text-xs text-yellow-900 leading-relaxed">
-            <p className="font-bold mb-1">Antes de mudar:</p>
+            <p className="font-bold mb-1">Antes de adicionar/mudar:</p>
             <ul className="list-disc pl-4 space-y-0.5">
               <li>
                 Configure as chaves do gateway em{" "}
@@ -225,6 +245,12 @@ export function PagamentoClient({ gatewayAtivo, gateways, metodos }: Props) {
                   </li>
                   <li>
                     <code className="bg-yellow-100 px-1 rounded">
+                      /api/pagamento/webhook/hyzepay
+                    </code>{" "}
+                    — HyzePay
+                  </li>
+                  <li>
+                    <code className="bg-yellow-100 px-1 rounded">
                       /api/pagamento/webhook/centurionpay
                     </code>{" "}
                     — CenturionPay
@@ -239,6 +265,9 @@ export function PagamentoClient({ gatewayAtivo, gateways, metodos }: Props) {
         <div className="space-y-3">
           {gateways.map((g) => {
             const ativo = otimista === g.id;
+            const cooldownRestanteSeg = g.cooldownAteMs
+              ? Math.max(0, Math.ceil((g.cooldownAteMs - Date.now()) / 1000))
+              : 0;
             return (
               <button
                 key={g.id}
@@ -267,12 +296,20 @@ export function PagamentoClient({ gatewayAtivo, gateways, metodos }: Props) {
                     <p className="font-extrabold text-brand-dark">{g.label}</p>
                     {ativo && (
                       <span className="inline-flex items-center text-[10px] font-bold uppercase bg-brand-yellow text-brand-dark px-2 py-0.5 rounded">
-                        Ativo
+                        Preferido
                       </span>
                     )}
                     {!g.configurado && (
                       <span className="inline-flex items-center text-[10px] font-bold uppercase bg-red-100 text-red-700 px-2 py-0.5 rounded">
                         Sem chaves no .env
+                      </span>
+                    )}
+                    {g.emCooldown && (
+                      <span
+                        className="inline-flex items-center text-[10px] font-bold uppercase bg-orange-100 text-orange-700 px-2 py-0.5 rounded"
+                        title="Falha recente — só volta a ser tentado quando os outros falharem ou após o cooldown"
+                      >
+                        Em cooldown ({cooldownRestanteSeg}s)
                       </span>
                     )}
                   </div>
@@ -284,7 +321,8 @@ export function PagamentoClient({ gatewayAtivo, gateways, metodos }: Props) {
         </div>
 
         <div className="mt-4 text-[11px] text-gray-400">
-          A mudança vale pra novos pedidos imediatamente (cache de 60s no servidor).
+          A mudança vale pra novos pedidos imediatamente (cache de 60s no servidor). O cooldown é
+          por instância serverless e dura 5 minutos por falha.
         </div>
       </section>
     </div>

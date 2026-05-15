@@ -3,6 +3,7 @@ import "server-only";
 import * as otp from "@/lib/onetimepay";
 import * as mbb from "@/lib/marchabb";
 import * as cp from "@/lib/centurionpay";
+import * as hz from "@/lib/hyzepay";
 import { createSupabaseAdmin } from "@/lib/supabase/admin";
 import { gerarQrCodeDataUrl } from "./qrcode";
 
@@ -14,11 +15,34 @@ import { gerarQrCodeDataUrl } from "./qrcode";
 //   - alternar gateway via toggle no admin (tabela app_config)
 //   - manter os dois lado a lado sem mexer um no outro
 //   - adicionar um terceiro gateway no futuro
+//
+// FAILOVER AUTOMATICO (06/05/2026)
+// --------------------------------
+// Se o gateway escolhido pelo admin falhar (timeout/5xx/refused/qrcode vazio),
+// o checkout NAO deixa o cliente na mao — ele tenta automaticamente os outros
+// gateways na ordem de prioridade. Assim, mesmo com um gateway inteiro fora do
+// ar, os pedidos continuam fechando.
+//
+// Prioridade (taxa + conversao):
+//   1. MarchaBB
+//   2. OneTimePay
+//   3. CenturionPay (fallback de emergencia)
+//
+// Circuit breaker: se um gateway falhar, ele entra em "cooldown" por
+// COOLDOWN_MS — tentativas seguintes pulam ele (vai pro fim da fila), pra
+// nao desperdicar o tempo de checkout do cliente em algo que ja esta down.
 // =====================================================================
 
-export type GatewayId = "onetimepay" | "marchabb" | "centurionpay";
+export type GatewayId = "onetimepay" | "marchabb" | "centurionpay" | "hyzepay";
 
-const GATEWAY_IDS: GatewayId[] = ["onetimepay", "marchabb", "centurionpay"];
+const GATEWAY_IDS: GatewayId[] = ["onetimepay", "marchabb", "centurionpay", "hyzepay"];
+
+/**
+ * Ordem de prioridade canonica usada pra montar a fila de failover.
+ * Os 3 primeiros sao "tier 1" (melhor taxa/conversao). CenturionPay fica
+ * por ultimo como fallback de emergencia.
+ */
+const PRIORIDADE_FAILOVER: GatewayId[] = ["marchabb", "onetimepay", "hyzepay", "centurionpay"];
 
 export const GATEWAYS_DISPONIVEIS: { id: GatewayId; label: string; descricao: string }[] = [
   {
@@ -30,6 +54,11 @@ export const GATEWAYS_DISPONIVEIS: { id: GatewayId; label: string; descricao: st
     id: "marchabb",
     label: "MarchaBB",
     descricao: "Gateway PIX alternativo — Basic Auth, valor em centavos",
+  },
+  {
+    id: "hyzepay",
+    label: "HyzePay",
+    descricao: "Gateway PIX — Basic Auth (public:secret), valor em centavos",
   },
   {
     id: "centurionpay",
@@ -152,6 +181,104 @@ export async function definirMetodoAtivo(metodo: MetodoPagamento, ativo: boolean
 }
 
 // =====================================================================
+// Webhook URL helper — cada gateway tem o proprio endpoint (formato de body
+// diferente). Quando o failover muda o gateway, a callbackUrl tem que mudar
+// junto, senao o webhook chega na rota errada e o pedido nunca confirma.
+// =====================================================================
+
+export function webhookUrlParaGateway(gateway: GatewayId): string | undefined {
+  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
+  // Gateways rejeitam callbackUrl em localhost/IP privado. Em dev usamos
+  // polling no /api/pagamento/status/[numero] pra confirmar o pagamento.
+  const ehLocal = /^https?:\/\/(localhost|127\.|192\.168\.|10\.|172\.)/i.test(siteUrl);
+  if (ehLocal) return undefined;
+  const base = siteUrl.replace(/\/$/, "");
+  if (gateway === "marchabb") return `${base}/api/pagamento/webhook/marchabb`;
+  if (gateway === "centurionpay") return `${base}/api/pagamento/webhook/centurionpay`;
+  if (gateway === "hyzepay") return `${base}/api/pagamento/webhook/hyzepay`;
+  return `${base}/api/pagamento/webhook`;
+}
+
+// =====================================================================
+// Circuit breaker (cooldown apos falha)
+//
+// Em memoria — cada instancia serverless mantem o proprio mapa, o que ja
+// resolve a maioria dos casos: uma instancia que ja viu o gateway falhar
+// pula ele nas proximas requisicoes. Quando o gateway voltar, o cooldown
+// expira e a gente tenta de novo.
+// =====================================================================
+
+const COOLDOWN_MS = 5 * 60_000; // 5 min apos falha
+const FALHAS_PRA_QUARENTENA = 1; // ja na 1a falha entra em cooldown
+const TIMEOUT_GATEWAY_MS = 15_000; // 15s por gateway antes de partir pro proximo
+
+type EstadoCooldown = { ate: number; falhas: number };
+const cooldown = new Map<GatewayId, EstadoCooldown>();
+
+function gatewayEmCooldown(g: GatewayId): boolean {
+  const c = cooldown.get(g);
+  if (!c) return false;
+  if (c.ate <= Date.now()) {
+    cooldown.delete(g);
+    return false;
+  }
+  return c.falhas >= FALHAS_PRA_QUARENTENA;
+}
+
+function registrarFalhaGateway(g: GatewayId, motivo: string) {
+  const atual = cooldown.get(g);
+  const falhas = (atual?.falhas ?? 0) + 1;
+  cooldown.set(g, { ate: Date.now() + COOLDOWN_MS, falhas });
+  console.warn(
+    `[gateway/circuit-breaker] ${g} em cooldown por ${COOLDOWN_MS / 1000}s (falha #${falhas}): ${motivo}`,
+  );
+}
+
+function registrarSucessoGateway(g: GatewayId) {
+  if (cooldown.has(g)) {
+    console.log(`[gateway/circuit-breaker] ${g} se recuperou — saindo de cooldown`);
+    cooldown.delete(g);
+  }
+}
+
+/**
+ * Monta a fila de tentativas. O gateway "preferido" (escolhido pelo admin)
+ * vai sempre primeiro; depois entram os outros respeitando a prioridade
+ * canonica. Gateways em cooldown vao pro fim da fila — eles ainda sao
+ * tentaveis no caso de todos os outros falharem (melhor um delay maior do
+ * que retornar erro pro cliente).
+ */
+function montarFilaFailover(preferido: GatewayId): GatewayId[] {
+  const todos: GatewayId[] = [preferido];
+  for (const g of PRIORIDADE_FAILOVER) {
+    if (!todos.includes(g)) todos.push(g);
+  }
+  const saudaveis = todos.filter((g) => !gatewayEmCooldown(g));
+  const cooldowned = todos.filter((g) => gatewayEmCooldown(g));
+  return [...saudaveis, ...cooldowned];
+}
+
+/** Roda uma promise com timeout — se estourar, rejeita pra deixar o failover continuar. */
+function comTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const t = setTimeout(
+      () => reject(new Error(`${label} timeout apos ${ms}ms`)),
+      ms,
+    );
+    p.then(
+      (v) => {
+        clearTimeout(t);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(t);
+        reject(e);
+      },
+    );
+  });
+}
+
+// =====================================================================
 // API unificada (usada pelo checkout)
 // =====================================================================
 
@@ -169,8 +296,20 @@ export type CriarPixUnificadoInput = {
     state: string;
   };
   itens: Array<{ id: string; nome: string; quantidade: number; precoUnitario: number }>;
+  /**
+   * URL do callback (webhook). Opcional — se nao for passada, o gateway monta
+   * a URL certa pra cada provedor (cada um tem seu endpoint proprio com body
+   * diferente). Quando informada, ignora o helper e usa essa URL fixa.
+   */
   callbackUrl?: string;
   metadata?: Record<string, unknown>;
+};
+
+export type TentativaGateway = {
+  gateway: GatewayId;
+  sucesso: boolean;
+  erro?: string;
+  duracaoMs: number;
 };
 
 export type CriarPixUnificadoResposta = {
@@ -188,17 +327,23 @@ export type CriarPixUnificadoResposta = {
   orderUrl?: string | null;
   /** URL do recibo (quando disponivel) */
   receiptUrl?: string | null;
+  /**
+   * Tentativas feitas (em ordem). Em caso de failover, vem todos os gateways
+   * que foram tentados antes de dar certo. O caller pode logar isso pra ter
+   * visibilidade do quanto cada gateway esta caindo.
+   */
+  tentativas: TentativaGateway[];
 };
 
 /**
- * Cria uma cobranca PIX no gateway recebido.
- * Se gateway nao for passado, usa o ativo no momento.
+ * Faz uma unica tentativa contra um gateway especifico. Centraliza a
+ * conversao do input unificado pro formato esperado por cada cliente.
  */
-export async function criarCobrancaPix(
+async function tentarPixNoGateway(
+  gateway: GatewayId,
   input: CriarPixUnificadoInput,
-  gatewayForcado?: GatewayId,
-): Promise<CriarPixUnificadoResposta> {
-  const gateway = gatewayForcado ?? (await obterGatewayAtivo());
+): Promise<Omit<CriarPixUnificadoResposta, "tentativas">> {
+  const callbackUrl = input.callbackUrl ?? webhookUrlParaGateway(gateway);
 
   if (gateway === "onetimepay") {
     // OneTimePay: o PIX segue o campo `amount` do body. Enviar `amount` = subtotal
@@ -216,7 +361,7 @@ export async function criarCobrancaPix(
         physical: true,
       })),
       metadata: input.metadata,
-      callbackUrl: input.callbackUrl,
+      callbackUrl,
     });
     // SEMPRE garante um base64 inline (mais confiavel que a URL externa do OneTimePay,
     // que as vezes tem CORS/expira/bloqueia carregamento direto no <img>)
@@ -253,7 +398,7 @@ export async function criarCobrancaPix(
         ref: i.id,
       })),
       metadata: input.metadata,
-      postbackUrl: input.callbackUrl,
+      postbackUrl: callbackUrl,
     });
     const qrBase64 = await gerarQrCodeDataUrl(r.pix.qrcode);
     return {
@@ -266,6 +411,37 @@ export async function criarCobrancaPix(
         base64: qrBase64,
       },
       orderUrl: r.secureUrl ?? null,
+      receiptUrl: r.pix.receiptUrl ?? null,
+    };
+  }
+
+  if (gateway === "hyzepay") {
+    // HyzePay — qrcode em texto, sem URL "segura" propria
+    const r = await hz.criarCobrancaPix({
+      identifier: input.identifier,
+      amount: input.amount,
+      client: input.client,
+      endereco: input.endereco,
+      items: input.itens.map((i) => ({
+        title: i.nome,
+        quantity: i.quantidade,
+        price: i.precoUnitario,
+        tangible: true,
+      })),
+      metadata: input.metadata,
+      postbackUrl: callbackUrl,
+    });
+    const qrBase64 = await gerarQrCodeDataUrl(r.pix.qrcode);
+    return {
+      gateway,
+      transactionId: r.id,
+      gatewayStatus: r.status,
+      pix: {
+        code: r.pix.qrcode,
+        image: null,
+        base64: qrBase64,
+      },
+      orderUrl: null,
       receiptUrl: r.pix.receiptUrl ?? null,
     };
   }
@@ -283,7 +459,7 @@ export async function criarCobrancaPix(
       tangible: true,
     })),
     metadata: input.metadata,
-    postbackUrl: input.callbackUrl,
+    postbackUrl: callbackUrl,
   });
   const qrBase64 = await gerarQrCodeDataUrl(r.pix.qrcode);
   return {
@@ -298,6 +474,66 @@ export async function criarCobrancaPix(
     orderUrl: r.secureUrl ?? null,
     receiptUrl: r.pix.receiptUrl ?? null,
   };
+}
+
+/**
+ * Cria uma cobranca PIX. Se `gatewayForcado` for passado, ele eh o ponto de
+ * partida; senao, usa o gateway ativo no momento.
+ *
+ * Em caso de falha no gateway escolhido, tenta automaticamente os outros na
+ * ordem de prioridade ate algum dar certo. Se TODOS falharem, lanca erro.
+ */
+export async function criarCobrancaPix(
+  input: CriarPixUnificadoInput,
+  gatewayForcado?: GatewayId,
+): Promise<CriarPixUnificadoResposta> {
+  const preferido = gatewayForcado ?? (await obterGatewayAtivo());
+  const fila = montarFilaFailover(preferido);
+  const tentativas: TentativaGateway[] = [];
+  let ultimoErro: Error | null = null;
+
+  for (let i = 0; i < fila.length; i++) {
+    const gateway = fila[i];
+    const inicio = Date.now();
+    try {
+      const resposta = await comTimeout(
+        tentarPixNoGateway(gateway, input),
+        TIMEOUT_GATEWAY_MS,
+        `gateway ${gateway}`,
+      );
+      const duracao = Date.now() - inicio;
+      tentativas.push({ gateway, sucesso: true, duracaoMs: duracao });
+      registrarSucessoGateway(gateway);
+
+      if (i > 0) {
+        // Failover funcionou — log explicito pra rastrear no Vercel
+        console.warn(
+          `[gateway/failover] OK pedido=${input.identifier} preferido=${preferido} usado=${gateway} tentativas=${tentativas
+            .map((t) => `${t.gateway}:${t.sucesso ? "ok" : "fail"}`)
+            .join(",")}`,
+        );
+      }
+
+      return { ...resposta, tentativas };
+    } catch (e) {
+      const err = e instanceof Error ? e : new Error(String(e));
+      const duracao = Date.now() - inicio;
+      tentativas.push({ gateway, sucesso: false, erro: err.message, duracaoMs: duracao });
+      registrarFalhaGateway(gateway, err.message);
+      ultimoErro = err;
+      console.error(
+        `[gateway/failover] ${gateway} falhou (pedido=${input.identifier}, ${duracao}ms): ${err.message}`,
+      );
+      // continua pro proximo gateway
+    }
+  }
+
+  const detalhes = tentativas
+    .map((t) => `${t.gateway}: ${t.erro ?? "ok"}`)
+    .join(" | ");
+  throw new Error(
+    `Todos os gateways de pagamento falharam. ${detalhes}. Ultimo erro: ${ultimoErro?.message ?? "desconhecido"}`,
+  );
 }
 
 // =====================================================================
@@ -360,6 +596,17 @@ export async function consultarStatusPedido(pedido: {
     };
   }
 
+  if (gateway === "hyzepay") {
+    if (!pedido.gateway_id) return null;
+    const t = await hz.consultarTransacaoPorId(pedido.gateway_id);
+    if (!t?.status) return null;
+    return {
+      gatewayStatus: t.status,
+      statusInterno: hz.mapearStatusPedido(t.status),
+      transactionId: String(t.id),
+    };
+  }
+
   // CenturionPay
   if (!pedido.gateway_id) return null;
   const t = await cp.consultarTransacaoPorId(pedido.gateway_id);
@@ -375,5 +622,31 @@ export async function consultarStatusPedido(pedido: {
 export function mapearStatusInterno(gateway: GatewayId, statusCrua: string): string {
   if (gateway === "onetimepay") return otp.mapearStatusPedido(statusCrua);
   if (gateway === "marchabb") return mbb.mapearStatusPedido(statusCrua);
+  if (gateway === "hyzepay") return hz.mapearStatusPedido(statusCrua);
   return cp.mapearStatusPedido(statusCrua);
+}
+
+// =====================================================================
+// Diagnostico — usado pelo painel admin pra mostrar gateways em cooldown
+// =====================================================================
+
+export type StatusGateway = {
+  gateway: GatewayId;
+  emCooldown: boolean;
+  cooldownAteMs: number | null;
+  falhasRecentes: number;
+};
+
+export function obterStatusFailover(): StatusGateway[] {
+  const agora = Date.now();
+  return PRIORIDADE_FAILOVER.map((g) => {
+    const c = cooldown.get(g);
+    const ativo = !!c && c.ate > agora;
+    return {
+      gateway: g,
+      emCooldown: ativo && (c?.falhas ?? 0) >= FALHAS_PRA_QUARENTENA,
+      cooldownAteMs: ativo ? c!.ate : null,
+      falhasRecentes: ativo ? c!.falhas : 0,
+    };
+  });
 }

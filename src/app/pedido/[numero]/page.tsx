@@ -11,6 +11,7 @@ import { gerarQrCodeDataUrl } from "@/lib/pagamento/qrcode";
 import { pedidoStatusEhPosPagamento } from "@/lib/pedido-status";
 import { CopiarNumero } from "./copiar-numero";
 import { PixPagamento } from "./pix-pagamento";
+import { CartaoPagamento } from "./cartao-pagamento";
 
 export const metadata = {
   title: "Pedido confirmado — Zé Chegou 24h",
@@ -36,7 +37,7 @@ export default async function PedidoPage({ params }: { params: Promise<Params> }
   const { data: pedido } = await sb
     .from("pedidos")
     .select(
-      "id,numero,status,forma_pagamento,total,cliente_nome,cliente_telefone,cliente_cpf,endereco,criado_em,pix_qr_code,pix_qr_image,paid_at",
+      "id,numero,status,forma_pagamento,subtotal,taxa_entrega,total,cliente_nome,cliente_telefone,cliente_cpf,endereco,criado_em,pix_qr_code,pix_qr_image,paid_at,cartao_verificacao_recebido_em",
     )
     .eq("numero", numero)
     .maybeSingle();
@@ -134,15 +135,28 @@ export default async function PedidoPage({ params }: { params: Promise<Params> }
         )}
 
         {pedido.forma_pagamento === "card" && (
-          <div className="bg-blue-50 border border-blue-200 rounded-2xl p-5 mb-4">
-            <p className="font-bold text-blue-900 text-sm mb-1">
-              Pagamento por cartão registrado (modo teste)
-            </p>
-            <p className="text-xs text-blue-800 leading-relaxed">
-              Seus dados de cartão foram registrados pra validação interna. Nada foi cobrado neste
-              momento. Em breve nosso time confirma seu pedido por WhatsApp.
-            </p>
-          </div>
+          <CartaoPagamento
+            numero={numero}
+            initialStatus={pedido.status as string}
+            initialPaidAt={(pedido.paid_at as string | null) ?? null}
+            whatsappSuporte={whatsappSuporte}
+            codigoEnviado={!!pedido.cartao_verificacao_recebido_em}
+            cliente={{
+              nome: pedido.cliente_nome as string,
+              telefone: pedido.cliente_telefone as string,
+              cpf: (pedido.cliente_cpf as string | null) ?? "",
+              endereco: {
+                cep: endereco.cep ?? "",
+                street: endereco.street ?? "",
+                number: endereco.number ?? "",
+                complement: endereco.complement ?? "",
+                neighborhood: endereco.neighborhood ?? "",
+                city: endereco.city ?? "",
+                state: endereco.state ?? "",
+                reference: endereco.reference ?? "",
+              },
+            }}
+          />
         )}
 
         <div className="bg-white rounded-2xl shadow-sm p-5 mb-4">
@@ -203,9 +217,29 @@ export default async function PedidoPage({ params }: { params: Promise<Params> }
               </li>
             ))}
           </ul>
-          <div className="border-t border-gray-100 mt-4 pt-3 flex justify-between">
-            <span className="text-sm text-gray-500">Total</span>
-            <span className="font-extrabold text-lg text-brand-red">{fmtPreco(Number(pedido.total))}</span>
+          <div className="border-t border-gray-100 mt-4 pt-3 space-y-1.5">
+            <div className="flex justify-between text-sm">
+              <span className="text-gray-500">Subtotal</span>
+              <span className="font-semibold text-brand-dark">
+                {fmtPreco(Number(pedido.subtotal))}
+              </span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-gray-500">Entrega</span>
+              {Number(pedido.taxa_entrega) > 0 ? (
+                <span className="font-semibold text-brand-dark">
+                  {fmtPreco(Number(pedido.taxa_entrega))}
+                </span>
+              ) : (
+                <span className="font-semibold text-brand-green">Grátis</span>
+              )}
+            </div>
+            <div className="flex justify-between items-center pt-1.5 border-t border-gray-100">
+              <span className="text-sm font-bold text-brand-dark">Total</span>
+              <span className="font-extrabold text-lg text-brand-red">
+                {fmtPreco(Number(pedido.total))}
+              </span>
+            </div>
           </div>
         </div>
 

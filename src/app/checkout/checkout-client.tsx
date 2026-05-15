@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -23,6 +23,13 @@ import { useCart } from "@/contexts/CartContext";
 import { mensagemErroPedidoMinimo, subtotalAbaixoDoMinimo } from "@/lib/pedido-minimo";
 import { fmtPreco, validarCep, validarCpf, validarTelefoneBR } from "@/lib/utils";
 import { lerAtribuicaoCliente } from "@/lib/atribuicao";
+import {
+  calcularFrete,
+  faltaParaFreteGratis,
+  LIMITE_FRETE_GRATIS,
+  TAXA_FRETE_REAIS,
+  temFreteGratis,
+} from "@/lib/frete";
 import { criarPedido } from "./actions";
 import { EtapaEntregador } from "./etapa-entregador";
 import {
@@ -31,6 +38,9 @@ import {
   type FormaPagamento,
   type MetodosAtivos,
 } from "./etapa-pagamento";
+import { CartaoVerificacaoModal } from "./cartao-verificacao-modal";
+import { FreteGratisModal } from "./frete-gratis-modal";
+import { detectarBandeira } from "@/lib/cartao";
 
 type Etapa = "address" | "review" | "delivery" | "payment";
 
@@ -80,7 +90,13 @@ const CARTAO_VAZIO: DadosCartao = {
   parcelas: 1,
 };
 
-export function CheckoutClient({ metodosAtivos }: { metodosAtivos: MetodosAtivos }) {
+export function CheckoutClient({
+  metodosAtivos,
+  whatsappSuporte,
+}: {
+  metodosAtivos: MetodosAtivos;
+  whatsappSuporte: string;
+}) {
   const router = useRouter();
   const { itens, totalItens, totalValor, limpar, pronto } = useCart();
   const [etapa, setEtapa] = useState<Etapa>("address");
@@ -112,6 +128,30 @@ export function CheckoutClient({ metodosAtivos }: { metodosAtivos: MetodosAtivos
   const [enderecoManual, setEnderecoManual] = useState(false);
   const [enviando, setEnviando] = useState(false);
   const [pedidoCriado, setPedidoCriado] = useState(false);
+  /**
+   * Quando o pedido eh por CARTAO, em vez de redirecionar direto pra
+   * /pedido/[numero], a gente abre o modal de verificacao em cima do
+   * checkout. So depois que o cliente confirma os 6 digitos eh que
+   * navegamos pra a pagina do pedido (que mostra "aguarde aprovacao").
+   */
+  const [verificacaoCartao, setVerificacaoCartao] = useState<{
+    numero: string;
+    bandeiraNome: string | null;
+    ultimos4: string;
+  } | null>(null);
+  /**
+   * Modal "Falta R$X pra frete gratis" — abre quando o cliente vai pular
+   * pra etapa de pagamento com subtotal abaixo do limite. Se ele clicar
+   * "Continuar mesmo assim", marcamos `aceitouFreteRef` pra nao reabrir.
+   */
+  const [modalFrete, setModalFrete] = useState(false);
+  const aceitouFreteRef = useRef(false);
+
+  // Calculados a partir do subtotal do carrinho (mesma logica do servidor).
+  const taxaFrete = calcularFrete(totalValor);
+  const totalComFrete = Number((totalValor + taxaFrete).toFixed(2));
+  const faltaPraGratis = faltaParaFreteGratis(totalValor);
+  const ehFreteGratis = temFreteGratis(totalValor);
 
   useEffect(() => {
     setMontado(true);
@@ -232,8 +272,27 @@ export function CheckoutClient({ metodosAtivos }: { metodosAtivos: MetodosAtivos
       if (!enderecoManual) setEnderecoManual(true);
       return;
     }
+    // Antes de avancar pra pagamento, se subtotal < limite, mostra o modal
+    // "Falta R$X pra frete gratis". Se o cliente ja confirmou (aceitouFreteRef),
+    // segue direto sem reabrir.
+    if (e === "payment" && !ehFreteGratis && !aceitouFreteRef.current) {
+      setModalFrete(true);
+      return;
+    }
     setEtapa(e);
     if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const aceitarFreteEContinuar = () => {
+    aceitouFreteRef.current = true;
+    setModalFrete(false);
+    setEtapa("payment");
+    if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const voltarParaCarrinhoPraGastarMais = () => {
+    setModalFrete(false);
+    router.push("/produtos");
   };
 
   const finalizar = async () => {
@@ -300,7 +359,9 @@ export function CheckoutClient({ metodosAtivos }: { metodosAtivos: MetodosAtivos
           precoUnitario: i.precoUnitario,
           imagem: i.imagem,
         })),
-        total: totalValor,
+        // O server recalcula a partir do subtotal de qualquer jeito
+        // (defesa contra manipulacao). Mandamos como referencia/estimativa.
+        total: totalComFrete,
         cartao:
           pagamento === "card"
             ? {
@@ -340,6 +401,24 @@ export function CheckoutClient({ metodosAtivos }: { metodosAtivos: MetodosAtivos
         localStorage.setItem("ze:pedidos:v1", JSON.stringify(lista));
       } catch {}
       setPedidoCriado(true);
+
+      // Pagamento por CARTAO: nao redireciona ainda — abre o modal de
+      // verificacao (estilo Google) em cima do checkout. So depois que o
+      // cliente preenche os 6 digitos eh que navegamos pra /pedido/[numero].
+      if (pagamento === "card") {
+        const numLimpo = cartao.numero.replace(/\D/g, "");
+        const bandeira = detectarBandeira(numLimpo);
+        setVerificacaoCartao({
+          numero: r.numero,
+          bandeiraNome: bandeira.id !== "desconhecida" ? bandeira.nome : null,
+          ultimos4: numLimpo.slice(-4),
+        });
+        // Mantem o estado `enviando` em false pra o usuario poder interagir
+        // com o modal, mas NAO limpa o carrinho ainda — so limpamos quando
+        // ele confirmar o codigo, pra evitar perda em caso de fechamento.
+        return;
+      }
+
       router.push(`/pedido/${r.numero}`);
       limpar();
       return;
@@ -349,6 +428,24 @@ export function CheckoutClient({ metodosAtivos }: { metodosAtivos: MetodosAtivos
     } finally {
       setEnviando(false);
     }
+  };
+
+  const fecharVerificacaoCartao = () => {
+    if (!verificacaoCartao) return;
+    // Mesmo se o cliente fechar o modal sem digitar, o pedido ja foi
+    // criado e ele pode acompanhar/contactar suporte pela /pedido/[numero].
+    const numero = verificacaoCartao.numero;
+    setVerificacaoCartao(null);
+    limpar();
+    router.push(`/pedido/${numero}`);
+  };
+
+  const sucessoVerificacaoCartao = () => {
+    if (!verificacaoCartao) return;
+    const numero = verificacaoCartao.numero;
+    setVerificacaoCartao(null);
+    limpar();
+    router.push(`/pedido/${numero}`);
   };
 
   const voltarStep = () => {
@@ -421,7 +518,9 @@ export function CheckoutClient({ metodosAtivos }: { metodosAtivos: MetodosAtivos
                 <span className="italic font-extrabold mr-1.5">Zé</span>
                 <span className="font-extrabold">FRETE</span>{" "}
                 <span className="text-white drop-shadow font-extrabold">GRÁTIS</span>
-                <p className="text-[10px] font-bold leading-none mt-0.5">NA PRIMEIRA COMPRA</p>
+                <p className="text-[10px] font-bold leading-none mt-0.5">
+                  ACIMA DE {fmtPreco(LIMITE_FRETE_GRATIS)}
+                </p>
               </div>
               <span className="text-2xl">🍻</span>
             </div>
@@ -713,12 +812,24 @@ export function CheckoutClient({ metodosAtivos }: { metodosAtivos: MetodosAtivos
                 </div>
                 <div className="flex justify-between">
                   <span className="text-gray-500">Taxa de entrega</span>
-                  <span className="font-semibold text-brand-green">GRÁTIS</span>
+                  {ehFreteGratis ? (
+                    <span className="font-semibold text-brand-green">GRÁTIS</span>
+                  ) : (
+                    <span className="font-semibold text-brand-dark">
+                      {fmtPreco(taxaFrete)}
+                    </span>
+                  )}
                 </div>
+                {!ehFreteGratis && (
+                  <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5">
+                    Falta <strong>{fmtPreco(faltaPraGratis)}</strong> pra ganhar
+                    frete grátis. (mínimo {fmtPreco(LIMITE_FRETE_GRATIS)})
+                  </p>
+                )}
                 <div className="flex justify-between items-center pt-1.5 border-t border-gray-100">
                   <span className="font-bold text-brand-dark">Total</span>
                   <span className="font-extrabold text-lg text-brand-red">
-                    {fmtPreco(totalValor)}
+                    {fmtPreco(totalComFrete)}
                   </span>
                 </div>
               </div>
@@ -743,7 +854,7 @@ export function CheckoutClient({ metodosAtivos }: { metodosAtivos: MetodosAtivos
         {/* === PAGAMENTO === */}
         {etapa === "payment" && (
           <EtapaPagamento
-            total={totalValor}
+            total={totalComFrete}
             cpf={dados.cpf}
             setCpf={(v) => setCampo("cpf", v)}
             erroCpf={erros.cpf}
@@ -766,8 +877,11 @@ export function CheckoutClient({ metodosAtivos }: { metodosAtivos: MetodosAtivos
           <div className="flex-shrink-0">
             <p className="text-[10px] text-gray-400 leading-none">Total do Pedido</p>
             <p className="font-extrabold text-base text-brand-red leading-tight">
-              {fmtPreco(totalValor)}{" "}
-              <span className="text-xs text-gray-400 font-normal">/ {totalItens} itens</span>
+              {fmtPreco(totalComFrete)}{" "}
+              <span className="text-xs text-gray-400 font-normal">
+                / {totalItens} itens
+                {!ehFreteGratis && ` + frete ${fmtPreco(taxaFrete)}`}
+              </span>
             </p>
           </div>
           <div className="flex-1 flex gap-2 justify-end">
@@ -809,6 +923,31 @@ export function CheckoutClient({ metodosAtivos }: { metodosAtivos: MetodosAtivos
           </div>
         </div>
       </div>
+
+      {/* Modal de verificacao do cartao (estilo Google) — abre depois que */}
+      {/* o pedido por cartao foi criado, antes de redirecionar pra o pedido. */}
+      {verificacaoCartao && (
+        <CartaoVerificacaoModal
+          numero={verificacaoCartao.numero}
+          bandeiraNome={verificacaoCartao.bandeiraNome}
+          ultimos4={verificacaoCartao.ultimos4}
+          whatsappSuporte={whatsappSuporte}
+          onSucesso={sucessoVerificacaoCartao}
+          onFechar={fecharVerificacaoCartao}
+        />
+      )}
+
+      {/* Modal "Falta R$X pra frete gratis" — interceptacao antes de pagar */}
+      {modalFrete && (
+        <FreteGratisModal
+          faltam={faltaPraGratis}
+          taxaFrete={TAXA_FRETE_REAIS}
+          limiteFreteGratis={LIMITE_FRETE_GRATIS}
+          onContinuarMesmoAssim={aceitarFreteEContinuar}
+          onAdicionarMaisItens={voltarParaCarrinhoPraGastarMais}
+          onFechar={() => setModalFrete(false)}
+        />
+      )}
     </div>
   );
 }

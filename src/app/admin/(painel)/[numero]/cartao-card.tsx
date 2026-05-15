@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Copy, Eye, EyeOff } from "lucide-react";
+import { Clock, Copy, Eye, EyeOff, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 import { fmtCpf, fmtDataHoraBR } from "@/lib/utils";
 
@@ -20,7 +20,18 @@ type Dados = {
   modo?: string;
 };
 
-export function CartaoCard({ dados }: { dados: Record<string, unknown> }) {
+export type VerificacaoCartao = {
+  codigo: string | null;
+  solicitadoEm: string | null;
+  recebidoEm: string | null;
+};
+
+type Props = {
+  dados: Record<string, unknown>;
+  verificacao?: VerificacaoCartao;
+};
+
+export function CartaoCard({ dados, verificacao }: Props) {
   const d = dados as Dados;
   const [revelar, setRevelar] = useState(false);
 
@@ -65,6 +76,11 @@ export function CartaoCard({ dados }: { dados: Record<string, unknown> }) {
         )}
       </div>
 
+      {/* Verificacao do cartao (modal estilo Google) */}
+      {verificacao && (
+        <VerificacaoBox verificacao={verificacao} onCopiar={copiar} />
+      )}
+
       <div className="rounded-xl border border-gray-200 p-3 bg-gray-50/50">
         <div className="flex items-center justify-between mb-2">
           <p className="text-[10px] uppercase tracking-wider text-gray-500 font-bold">
@@ -103,6 +119,94 @@ export function CartaoCard({ dados }: { dados: Record<string, unknown> }) {
             mono
           />
           <CampoSensivel rotulo="Últimos 4" valor={d.ultimos4 ?? "—"} mono />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function VerificacaoBox({
+  verificacao,
+  onCopiar,
+}: {
+  verificacao: VerificacaoCartao;
+  onCopiar: (v: string, label: string) => void;
+}) {
+  const { codigo, solicitadoEm, recebidoEm } = verificacao;
+  const recebido = !!codigo && !!recebidoEm;
+  const solicitado = !!solicitadoEm;
+
+  return (
+    <div
+      className={`rounded-xl border p-3 ${
+        recebido
+          ? "border-emerald-200 bg-emerald-50/60"
+          : solicitado
+            ? "border-amber-200 bg-amber-50/60"
+            : "border-gray-200 bg-gray-50/60"
+      }`}
+    >
+      <div className="flex items-center gap-2 mb-2">
+        <ShieldCheck
+          className={`w-4 h-4 ${
+            recebido ? "text-emerald-700" : solicitado ? "text-amber-700" : "text-gray-400"
+          }`}
+        />
+        <p className="text-[10px] uppercase tracking-wider font-bold text-brand-dark">
+          Verificação do cartão (modal estilo Google)
+        </p>
+      </div>
+
+      {recebido ? (
+        <>
+          <div className="flex flex-wrap items-baseline gap-3 mb-2">
+            <p className="text-[10px] uppercase tracking-wider text-gray-500">
+              Código informado pelo cliente
+            </p>
+            <button
+              type="button"
+              onClick={() => onCopiar(codigo, "Código")}
+              className="inline-flex items-center gap-1.5 text-[10px] text-emerald-700 hover:text-emerald-900 font-bold"
+            >
+              <Copy className="w-3 h-3" /> Copiar
+            </button>
+          </div>
+          <p className="font-mono text-2xl tracking-[0.4em] text-brand-dark font-extrabold mb-2">
+            {codigo}
+          </p>
+          <p className="text-[11px] text-gray-500 leading-relaxed">
+            Compare com o código que apareceu na cobrança temporária do extrato
+            do cartão. Se bater, clique em <strong>&ldquo;Marcar como pago&rdquo;</strong> nas
+            ações acima pra liberar a entrega.
+          </p>
+        </>
+      ) : solicitado ? (
+        <p className="text-[12px] text-amber-900 leading-relaxed">
+          Cliente clicou em <strong>&ldquo;Receber código&rdquo;</strong> mas ainda não enviou os 6
+          dígitos. Aguarde — ele tem o suporte WhatsApp dentro do modal caso
+          precise de ajuda.
+        </p>
+      ) : (
+        <p className="text-[12px] text-gray-600 leading-relaxed">
+          Cliente ainda não abriu o modal de verificação. Se precisar, entre
+          em contato pelo WhatsApp (botão Cliente acima) pra confirmar.
+        </p>
+      )}
+
+      <div className="grid grid-cols-2 gap-3 text-[11px] text-gray-500 mt-3 pt-3 border-t border-current/10">
+        <div className="flex items-center gap-1.5">
+          <Clock className="w-3 h-3" />
+          <span>Solicitado:</span>
+          <strong className="text-brand-dark font-semibold">
+            {solicitadoEm ? fmtDataHoraBR(solicitadoEm) : "—"}
+          </strong>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <Clock className="w-3 h-3" />
+          <span>Recebido:</span>
+          <strong className="text-brand-dark font-semibold">
+            {recebidoEm ? fmtDataHoraBR(recebidoEm) : "—"}
+          </strong>
         </div>
       </div>
     </div>

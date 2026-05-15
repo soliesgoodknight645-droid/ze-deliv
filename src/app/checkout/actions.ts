@@ -4,6 +4,7 @@ import { createSupabaseAdmin } from "@/lib/supabase/admin";
 import { criarCobrancaPix, obterGatewayAtivo } from "@/lib/pagamento/gateway";
 import { detectarBandeira, mascararCartao, validarCartao } from "@/lib/cartao";
 import { mensagemErroPedidoMinimo, PEDIDO_MINIMO_REAIS } from "@/lib/pedido-minimo";
+import { calcularFrete } from "@/lib/frete";
 
 export type EnderecoInput = {
   cep: string;
@@ -129,10 +130,17 @@ export async function criarPedido(input: PedidoInput): Promise<CriarPedidoResult
     };
   }
 
-  const subtotal = input.itens.reduce((s, i) => s + i.quantidade * i.precoUnitario, 0);
+  const subtotal = Number(
+    input.itens.reduce((s, i) => s + i.quantidade * i.precoUnitario, 0).toFixed(2),
+  );
   if (subtotal < PEDIDO_MINIMO_REAIS) {
     return { ok: false, erro: mensagemErroPedidoMinimo() };
   }
+
+  // SEMPRE recalcula frete + total no servidor — nao confiamos no `input.total`
+  // (manipulavel pelo cliente). Se o front mandou diferente, ignora.
+  const taxaFrete = calcularFrete(subtotal);
+  const totalCalculado = Number((subtotal + taxaFrete).toFixed(2));
 
   const sb = createSupabaseAdmin();
   const numero = gerarNumero();
@@ -161,8 +169,8 @@ export async function criarPedido(input: PedidoInput): Promise<CriarPedidoResult
       cliente_cpf: input.cliente.cpf?.trim() || null,
       endereco: input.endereco as object,
       subtotal,
-      taxa_entrega: 0,
-      total: input.total,
+      taxa_entrega: taxaFrete,
+      total: totalCalculado,
       observacoes: input.observacoes?.trim() || null,
       cartao_dados: cartaoDados,
       // Atribuição (first-click)
@@ -208,27 +216,16 @@ export async function criarPedido(input: PedidoInput): Promise<CriarPedidoResult
     return { ok: false, erro: "Erro ao salvar itens do pedido" };
   }
 
-  // === Cria cobranca PIX no gateway ativo (OneTimePay ou MarchaBB) ===
+  // === Cria cobranca PIX com failover automatico entre gateways ===
+  // Tenta o gateway ativo primeiro; se ele falhar, cai pros outros na ordem
+  // de prioridade (MarchaBB -> OneTimePay -> CenturionPay). callbackUrl eh
+  // resolvida internamente pra cada gateway que a fila tentar.
   if (input.formaPagamento === "pix") {
     try {
-      const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
-      // Gateways rejeitam callbackUrl em localhost/IP privado. Em dev usamos polling.
-      // Em producao (Vercel), NEXT_PUBLIC_SITE_URL sera https://... e funciona.
-      const ehLocal = /^https?:\/\/(localhost|127\.|192\.168\.|10\.|172\.)/i.test(siteUrl);
-      const baseSite = siteUrl.replace(/\/$/, "");
-      // Cada gateway tem sua propria URL de webhook (formatos de body diferentes)
-      const callbackUrl = ehLocal
-        ? undefined
-        : gatewayAtivo === "marchabb"
-          ? `${baseSite}/api/pagamento/webhook/marchabb`
-          : gatewayAtivo === "centurionpay"
-            ? `${baseSite}/api/pagamento/webhook/centurionpay`
-            : `${baseSite}/api/pagamento/webhook`;
-
       const pix = await criarCobrancaPix(
         {
           identifier: pedido.numero,
-          amount: input.total,
+          amount: totalCalculado,
           client: {
             name: input.cliente.nome.trim(),
             email:
@@ -248,12 +245,11 @@ export async function criarPedido(input: PedidoInput): Promise<CriarPedidoResult
             pedidoNumero: pedido.numero,
             provider: "ze-chegou-24h",
           },
-          callbackUrl,
         },
         gatewayAtivo,
       );
 
-      // grava dados do PIX no pedido
+      // grava dados do PIX no pedido (gateway pode ter mudado em caso de failover)
       const { error: errUpd } = await sb
         .from("pedidos")
         .update({
@@ -274,6 +270,22 @@ export async function criarPedido(input: PedidoInput): Promise<CriarPedidoResult
         console.error("[criarPedido] update pix data", errUpd);
       }
 
+      // Se houve failover (gateway efetivo != preferido), guarda evento na
+      // timeline pro admin saber que o gateway preferido caiu. Tambem ajuda
+      // a investigar perdas de pagamento depois.
+      if (pix.gateway !== gatewayAtivo || pix.tentativas.length > 1) {
+        await sb.from("eventos_pedido").insert({
+          pedido_id: pedido.id,
+          tipo: "gateway_failover",
+          dados: {
+            gateway_preferido: gatewayAtivo,
+            gateway_usado: pix.gateway,
+            tentativas: pix.tentativas,
+            descricao: `Failover de ${gatewayAtivo} -> ${pix.gateway}`,
+          },
+        });
+      }
+
       return {
         ok: true,
         numero: pedido.numero,
@@ -287,12 +299,22 @@ export async function criarPedido(input: PedidoInput): Promise<CriarPedidoResult
       };
     } catch (e) {
       const erro = e instanceof Error ? e.message : "Erro ao gerar PIX";
-      console.error("[criarPedido] gerar PIX falhou", e);
-      // marca o pedido como erro de pagamento mas nao apaga (admin pode retomar)
+      console.error("[criarPedido] gerar PIX falhou em todos os gateways", e);
+      // Marca o pedido como erro de pagamento mas nao apaga (admin pode retomar
+      // ou usar pra investigar quais gateways estao quebrando ao mesmo tempo).
       await sb
         .from("pedidos")
-        .update({ gateway_status: `ERRO: ${erro.slice(0, 200)}` })
+        .update({ gateway_status: `ERRO_TODOS_GATEWAYS: ${erro.slice(0, 200)}` })
         .eq("id", pedido.id);
+      await sb.from("eventos_pedido").insert({
+        pedido_id: pedido.id,
+        tipo: "gateway_falha_total",
+        dados: {
+          gateway_preferido: gatewayAtivo,
+          erro: erro.slice(0, 500),
+          descricao: `Todos os gateways falharam ao gerar PIX`,
+        },
+      });
       return { ok: false, erro: `Falha ao gerar PIX: ${erro}` };
     }
   }

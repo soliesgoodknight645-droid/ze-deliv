@@ -2,6 +2,7 @@ import {
   GATEWAYS_DISPONIVEIS,
   obterGatewayAtivo,
   obterMetodosAtivos,
+  obterStatusFailover,
 } from "@/lib/pagamento/gateway";
 import { PagamentoClient } from "./pagamento-client";
 
@@ -16,6 +17,7 @@ export default async function PagamentoPage() {
     obterGatewayAtivo(),
     obterMetodosAtivos(),
   ]);
+  const statusFailover = obterStatusFailover();
 
   // Detecta se as chaves de cada gateway estao configuradas
   const onetimepayConfigurado = !!(
@@ -24,19 +26,31 @@ export default async function PagamentoPage() {
   const marchabbConfigurado = !!(
     process.env.MARCHABB_PUBLIC_KEY && process.env.MARCHABB_SECRET_KEY
   );
+  const hyzepayConfigurado = !!(
+    process.env.HYZEPAY_PUBLIC_KEY && process.env.HYZEPAY_SECRET_KEY
+  );
   const centurionpayConfigurado = !!(
     process.env.CENTURIONPAY_SECRET_KEY && process.env.CENTURIONPAY_COMPANY_ID
   );
 
-  const gateways = GATEWAYS_DISPONIVEIS.map((g) => ({
-    ...g,
-    configurado:
-      g.id === "onetimepay"
-        ? onetimepayConfigurado
-        : g.id === "marchabb"
-          ? marchabbConfigurado
-          : centurionpayConfigurado,
-  }));
+  const configPorId: Record<string, boolean> = {
+    onetimepay: onetimepayConfigurado,
+    marchabb: marchabbConfigurado,
+    hyzepay: hyzepayConfigurado,
+    centurionpay: centurionpayConfigurado,
+  };
+
+  const statusPorId = new Map(statusFailover.map((s) => [s.gateway, s]));
+
+  const gateways = GATEWAYS_DISPONIVEIS.map((g) => {
+    const st = statusPorId.get(g.id);
+    return {
+      ...g,
+      configurado: configPorId[g.id] ?? false,
+      emCooldown: st?.emCooldown ?? false,
+      cooldownAteMs: st?.cooldownAteMs ?? null,
+    };
+  });
 
   return <PagamentoClient gatewayAtivo={ativo} gateways={gateways} metodos={metodos} />;
 }
