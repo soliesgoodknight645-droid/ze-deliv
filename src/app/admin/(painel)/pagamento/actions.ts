@@ -5,6 +5,7 @@ import { createSupabaseServer } from "@/lib/supabase/server";
 import {
   definirGatewayAtivo,
   definirMetodoAtivo,
+  GATEWAYS_DISPONIVEIS,
   obterGatewayAtivo,
   obterMetodosAtivos,
   type GatewayId,
@@ -14,11 +15,10 @@ import {
 export async function alternarGateway(
   novoGateway: GatewayId,
 ): Promise<{ ok: true; gateway: GatewayId } | { ok: false; erro: string }> {
-  if (
-    novoGateway !== "onetimepay" &&
-    novoGateway !== "marchabb" &&
-    novoGateway !== "centurionpay"
-  ) {
+  // Valida a partir da lista canonica de gateways suportados — assim quando
+  // a gente plugar um gateway novo nao precisa mexer aqui de novo.
+  const idsValidos = GATEWAYS_DISPONIVEIS.map((g) => g.id);
+  if (!idsValidos.includes(novoGateway)) {
     return { ok: false, erro: "Gateway invalido" };
   }
 

@@ -39,3 +39,6 @@ next-env.d.ts
 # arquivos gerados pelo prebuild (sao recriados automaticamente)
 src/data/imagens-produtos.json
 src/data/imagens-categorias.json
+
+# arquivos temporarios
+.commit-msg.tmp
