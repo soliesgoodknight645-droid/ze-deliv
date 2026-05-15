@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { createSupabaseAdmin } from "@/lib/supabase/admin";
 import { createSupabaseServer } from "@/lib/supabase/server";
 import { slugify } from "@/lib/utils";
+import { uploadArquivoCatalogo } from "@/lib/storage-catalogo";
 
 async function ensureAdmin() {
   const sb = createSupabaseServer();
@@ -167,15 +168,7 @@ export async function uploadImagemCategoria(formData: FormData): Promise<{
     const ext = (file.name.split(".").pop() || "png").toLowerCase().replace(/[^a-z0-9]/g, "");
     const path = `categorias/${slug}-${Date.now()}.${ext}`;
 
-    const admin = createSupabaseAdmin();
-    const { error } = await admin.storage
-      .from("catalogo")
-      .upload(path, file, { upsert: true, contentType: file.type });
-
-    if (error) return { ok: false, erro: error.message };
-
-    const { data } = admin.storage.from("catalogo").getPublicUrl(path);
-    return { ok: true, url: data.publicUrl };
+    return await uploadArquivoCatalogo(file, path);
   } catch (e: unknown) {
     return { ok: false, erro: (e as Error).message };
   }

@@ -6,6 +6,7 @@ import { imagemProduto } from "@/lib/imagens";
 import { fmtPreco } from "@/lib/utils";
 import { SafeProductImage } from "@/components/SafeProductImage";
 import { ProdutosReorderClient } from "./reorder-client";
+import { RepararBucketButton } from "./reparar-bucket-button";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Admin · Produtos — Zé Chegou 24h", robots: { index: false } };
@@ -78,12 +79,15 @@ export default async function ProdutosPage({
             {total.toLocaleString("pt-BR")} produto{total === 1 ? "" : "s"}
           </p>
         </div>
-        <Link
-          href="/admin/produtos/novo"
-          className="inline-flex items-center gap-1.5 h-10 px-4 rounded-lg text-sm font-bold bg-brand-yellow text-brand-dark active:scale-95"
-        >
-          <Plus className="w-4 h-4" /> Novo
-        </Link>
+        <div className="flex items-center gap-2">
+          <RepararBucketButton />
+          <Link
+            href="/admin/produtos/novo"
+            className="inline-flex items-center gap-1.5 h-10 px-4 rounded-lg text-sm font-bold bg-brand-yellow text-brand-dark active:scale-95"
+          >
+            <Plus className="w-4 h-4" /> Novo
+          </Link>
+        </div>
       </div>
 
       <form

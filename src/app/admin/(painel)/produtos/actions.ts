@@ -5,6 +5,10 @@ import { redirect } from "next/navigation";
 import { createSupabaseAdmin } from "@/lib/supabase/admin";
 import { createSupabaseServer } from "@/lib/supabase/server";
 import { slugify } from "@/lib/utils";
+import {
+  garantirBucketCatalogoPublico,
+  uploadArquivoCatalogo,
+} from "@/lib/storage-catalogo";
 
 async function ensureAdmin() {
   const sb = createSupabaseServer();
@@ -26,6 +30,17 @@ function invalidarCatalogo() {
   revalidateTag("catalogo");
   revalidatePath("/", "layout");
   revalidatePath("/admin/produtos");
+}
+
+/**
+ * Action pro admin reparar manualmente o bucket caso suspeite de problema
+ * com fotos nao aparecendo. Forca verificacao sem cache.
+ */
+export async function repararBucketImagens(): Promise<
+  { ok: true; publico: boolean } | { ok: false; erro: string }
+> {
+  await ensureAdmin();
+  return garantirBucketCatalogoPublico(true);
 }
 
 export type ProdutoInput = {
@@ -200,15 +215,7 @@ export async function uploadImagemProduto(formData: FormData): Promise<{
     const ext = (file.name.split(".").pop() || "png").toLowerCase().replace(/[^a-z0-9]/g, "");
     const path = `produtos/${slug}-${Date.now()}.${ext}`;
 
-    const admin = createSupabaseAdmin();
-    const { error } = await admin.storage
-      .from("catalogo")
-      .upload(path, file, { upsert: true, contentType: file.type });
-
-    if (error) return { ok: false, erro: error.message };
-
-    const { data } = admin.storage.from("catalogo").getPublicUrl(path);
-    return { ok: true, url: data.publicUrl };
+    return await uploadArquivoCatalogo(file, path);
   } catch (e: unknown) {
     return { ok: false, erro: (e as Error).message };
   }
