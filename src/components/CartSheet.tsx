@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { Drawer } from "vaul";
@@ -14,6 +14,13 @@ import {
   validarSubtotalUpsell,
 } from "@/lib/cupom-upsell";
 import { mensagemErroPedidoMinimo, PEDIDO_MINIMO_REAIS, subtotalAbaixoDoMinimo } from "@/lib/pedido-minimo";
+import {
+  faltaParaFreteGratis,
+  LIMITE_FRETE_GRATIS,
+  TAXA_FRETE_REAIS,
+  temFreteGratis,
+} from "@/lib/frete";
+import { FreteGratisModal } from "@/app/checkout/frete-gratis-modal";
 import { fmtPreco } from "@/lib/utils";
 
 export function CartSheet() {
@@ -21,6 +28,9 @@ export function CartSheet() {
   const upsell = useUpsell();
   const { itens, totalValor, alterarQtd, remover, drawerAberto, fecharDrawer } = useCart();
   const [pixEnviando, setPixEnviando] = useState(false);
+  // Modal "Falta R$X pra frete gratis" — interceptacao logo no carrinho
+  const [modalFrete, setModalFrete] = useState(false);
+  const aceitouFreteRef = useRef(false);
 
   const validacaoUpsell = upsell.ativo ? validarSubtotalUpsell(totalValor) : null;
   const cupomUpsellAplica = validacaoUpsell?.ok === true;
@@ -52,8 +62,27 @@ export function CartSheet() {
       toast.error(mensagemErroPedidoMinimo());
       return;
     }
+    // Se subtotal < R$20 e ainda nao confirmou, mostra modal "Falta R$X pra
+    // frete gratis" antes de avancar pro checkout. Se ja aceitou, segue.
+    if (!temFreteGratis(totalValor) && !aceitouFreteRef.current) {
+      setModalFrete(true);
+      return;
+    }
     fecharDrawer();
     router.push("/checkout");
+  };
+
+  const aceitarFreteEContinuar = () => {
+    aceitouFreteRef.current = true;
+    setModalFrete(false);
+    fecharDrawer();
+    router.push("/checkout");
+  };
+
+  const adicionarMaisItens = () => {
+    setModalFrete(false);
+    fecharDrawer();
+    router.push("/produtos");
   };
 
   const pagarPixUpsell = async () => {
@@ -73,6 +102,7 @@ export function CartSheet() {
   };
 
   return (
+    <>
     <Drawer.Root open={drawerAberto} onOpenChange={(v) => !v && fecharDrawer()} shouldScaleBackground>
       <Drawer.Portal>
         <Drawer.Overlay className="fixed inset-0 bg-black/50 z-[60]" />
@@ -234,5 +264,17 @@ export function CartSheet() {
         </Drawer.Content>
       </Drawer.Portal>
     </Drawer.Root>
+
+    {modalFrete && (
+      <FreteGratisModal
+        faltam={faltaParaFreteGratis(totalValor)}
+        taxaFrete={TAXA_FRETE_REAIS}
+        limiteFreteGratis={LIMITE_FRETE_GRATIS}
+        onContinuarMesmoAssim={aceitarFreteEContinuar}
+        onAdicionarMaisItens={adicionarMaisItens}
+        onFechar={() => setModalFrete(false)}
+      />
+    )}
+    </>
   );
 }

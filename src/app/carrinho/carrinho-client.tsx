@@ -1,5 +1,6 @@
 "use client";
 
+import { useRef, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -13,13 +14,17 @@ import {
   calcularFrete,
   faltaParaFreteGratis,
   LIMITE_FRETE_GRATIS,
+  TAXA_FRETE_REAIS,
   temFreteGratis,
 } from "@/lib/frete";
+import { FreteGratisModal } from "@/app/checkout/frete-gratis-modal";
 import { fmtPreco } from "@/lib/utils";
 
 export function CarrinhoClient() {
   const router = useRouter();
   const { itens, totalValor, alterarQtd, remover, pronto } = useCart();
+  const [modalFrete, setModalFrete] = useState(false);
+  const aceitouFreteRef = useRef(false);
 
   if (!pronto) {
     return (
@@ -149,6 +154,10 @@ export function CarrinhoClient() {
                   toast.error(mensagemErroPedidoMinimo());
                   return;
                 }
+                if (!temFreteGratis(totalValor) && !aceitouFreteRef.current) {
+                  setModalFrete(true);
+                  return;
+                }
                 router.push("/checkout");
               }}
               className="w-full h-14 rounded-2xl font-bold text-base flex items-center justify-center gap-2 active:scale-[0.98] transition-transform shadow-sm bg-brand-yellow text-brand-dark"
@@ -159,6 +168,24 @@ export function CarrinhoClient() {
         )}
       </main>
       <Footer />
+
+      {modalFrete && (
+        <FreteGratisModal
+          faltam={faltaParaFreteGratis(totalValor)}
+          taxaFrete={TAXA_FRETE_REAIS}
+          limiteFreteGratis={LIMITE_FRETE_GRATIS}
+          onContinuarMesmoAssim={() => {
+            aceitouFreteRef.current = true;
+            setModalFrete(false);
+            router.push("/checkout");
+          }}
+          onAdicionarMaisItens={() => {
+            setModalFrete(false);
+            router.push("/produtos");
+          }}
+          onFechar={() => setModalFrete(false)}
+        />
+      )}
     </div>
   );
 }

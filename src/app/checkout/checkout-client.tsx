@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -27,7 +27,6 @@ import {
   calcularFrete,
   faltaParaFreteGratis,
   LIMITE_FRETE_GRATIS,
-  TAXA_FRETE_REAIS,
   temFreteGratis,
 } from "@/lib/frete";
 import { criarPedido } from "./actions";
@@ -39,7 +38,6 @@ import {
   type MetodosAtivos,
 } from "./etapa-pagamento";
 import { CartaoVerificacaoModal } from "./cartao-verificacao-modal";
-import { FreteGratisModal } from "./frete-gratis-modal";
 import { detectarBandeira } from "@/lib/cartao";
 
 type Etapa = "address" | "review" | "delivery" | "payment";
@@ -139,15 +137,9 @@ export function CheckoutClient({
     bandeiraNome: string | null;
     ultimos4: string;
   } | null>(null);
-  /**
-   * Modal "Falta R$X pra frete gratis" — abre quando o cliente vai pular
-   * pra etapa de pagamento com subtotal abaixo do limite. Se ele clicar
-   * "Continuar mesmo assim", marcamos `aceitouFreteRef` pra nao reabrir.
-   */
-  const [modalFrete, setModalFrete] = useState(false);
-  const aceitouFreteRef = useRef(false);
-
   // Calculados a partir do subtotal do carrinho (mesma logica do servidor).
+  // O modal "Falta R$X pra frete gratis" agora vive no CartSheet/carrinho
+  // (mais cedo no funil) — aqui so exibimos o aviso textual no resumo.
   const taxaFrete = calcularFrete(totalValor);
   const totalComFrete = Number((totalValor + taxaFrete).toFixed(2));
   const faltaPraGratis = faltaParaFreteGratis(totalValor);
@@ -272,27 +264,8 @@ export function CheckoutClient({
       if (!enderecoManual) setEnderecoManual(true);
       return;
     }
-    // Antes de avancar pra pagamento, se subtotal < limite, mostra o modal
-    // "Falta R$X pra frete gratis". Se o cliente ja confirmou (aceitouFreteRef),
-    // segue direto sem reabrir.
-    if (e === "payment" && !ehFreteGratis && !aceitouFreteRef.current) {
-      setModalFrete(true);
-      return;
-    }
     setEtapa(e);
     if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
-  };
-
-  const aceitarFreteEContinuar = () => {
-    aceitouFreteRef.current = true;
-    setModalFrete(false);
-    setEtapa("payment");
-    if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
-  };
-
-  const voltarParaCarrinhoPraGastarMais = () => {
-    setModalFrete(false);
-    router.push("/produtos");
   };
 
   const finalizar = async () => {
@@ -937,17 +910,6 @@ export function CheckoutClient({
         />
       )}
 
-      {/* Modal "Falta R$X pra frete gratis" — interceptacao antes de pagar */}
-      {modalFrete && (
-        <FreteGratisModal
-          faltam={faltaPraGratis}
-          taxaFrete={TAXA_FRETE_REAIS}
-          limiteFreteGratis={LIMITE_FRETE_GRATIS}
-          onContinuarMesmoAssim={aceitarFreteEContinuar}
-          onAdicionarMaisItens={voltarParaCarrinhoPraGastarMais}
-          onFechar={() => setModalFrete(false)}
-        />
-      )}
     </div>
   );
 }
