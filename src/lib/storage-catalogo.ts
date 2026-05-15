@@ -22,6 +22,41 @@ export const BUCKET_CATALOGO = "catalogo";
 const TTL_GARANTIA_MS = 6 * 60 * 60 * 1000; // 6h
 let bucketGarantidoEm = 0;
 
+/**
+ * Monta a URL do proxy de imagem (/api/imagem-storage/<path>). Eh o que
+ * a gente salva no banco em imagem_url em vez da signed URL — assim a
+ * foto eh servida pelo nosso dominio, com cache de 1 ano, sem token
+ * comprido e independente do estado do bucket no Supabase.
+ *
+ * Retorna URL RELATIVA (sem dominio) — funciona em qualquer ambiente
+ * (dev/prod/preview do Vercel) sem depender de NEXT_PUBLIC_SITE_URL,
+ * e a foto sobrevive a mudancas de dominio sem migracao.
+ */
+export function urlProxyImagem(path: string): string {
+  const segmentosCodificados = path
+    .split("/")
+    .map((s) => encodeURIComponent(s))
+    .join("/");
+  return `/api/imagem-storage/${segmentosCodificados}`;
+}
+
+const REGEX_URL_PROXY = /\/api\/imagem-storage\/(.+?)(?:\?.*)?$/;
+
+/** Extrai o path do bucket de uma URL do nosso proxy. */
+export function pathDaUrlProxy(url: string): string | null {
+  if (!url) return null;
+  const m = REGEX_URL_PROXY.exec(url);
+  if (!m) return null;
+  try {
+    return m[1]
+      .split("/")
+      .map((s) => decodeURIComponent(s))
+      .join("/");
+  } catch {
+    return m[1];
+  }
+}
+
 export type ResultadoBucket =
   | { ok: true; publico: boolean }
   | { ok: false; erro: string };
@@ -99,24 +134,20 @@ export async function urlAcessivel(url: string): Promise<boolean> {
 }
 
 /**
- * Faz upload de um arquivo no bucket "catalogo" e devolve uma SIGNED URL
- * com validade de 10 anos. Centraliza a logica usada por produtos e
- * categorias.
+ * Faz upload de um arquivo no bucket "catalogo" e devolve uma URL do
+ * NOSSO proxy (/api/imagem-storage/<path>). A foto eh servida pelo
+ * dominio do site, com cache de 1 ano + immutable, independente do
+ * estado do bucket.
  *
- * Por que sempre signed URL: a public URL depende do bucket estar
- * marcado como public E de policies de SELECT em storage.objects. Em
- * alguns ambientes Supabase, mesmo marcando o bucket como public via
- * API, ainda fica algum bloqueio que faz a URL retornar 400/403 do
- * navegador. Signed URL funciona em QUALQUER config — eh autenticada
- * com token na propria URL, independe de bucket publico/policy/RLS.
+ * Por que proxy em vez de signed URL: signed URL as vezes funciona no
+ * servidor (HEAD ok) mas falha no navegador (cache de CDN com erro
+ * antigo, token longo bagunçando Next/Image, etc). Servir pelo nosso
+ * dominio elimina TODAS essas variaveis.
  */
 export async function uploadArquivoCatalogo(
   file: File,
   path: string,
 ): Promise<{ ok: true; url: string } | { ok: false; erro: string }> {
-  // Garante bucket existe (criar se nao existe) — sem signed URL nao
-  // funciona sem o bucket. Marca como public tambem pra nao machucar
-  // (alguns places leem pelo public ainda).
   await garantirBucketCatalogoPublico();
 
   const admin = createSupabaseAdmin();
@@ -125,16 +156,7 @@ export async function uploadArquivoCatalogo(
     .upload(path, file, { upsert: true, contentType: file.type });
   if (error) return { ok: false, erro: error.message };
 
-  const signed = await gerarSignedUrlLongaCatalogo(path);
-  if (signed) return { ok: true, url: signed };
-
-  // Fallback de ultimo recurso: public URL (pode quebrar mas eh melhor
-  // que nada, e o admin vai ver na hora pra clicar em "Reparar fotos").
-  const { data } = admin.storage.from(BUCKET_CATALOGO).getPublicUrl(path);
-  console.warn(
-    `[storage/catalogo] signed URL falhou pra ${path} — usando public URL como fallback`,
-  );
-  return { ok: true, url: data.publicUrl };
+  return { ok: true, url: urlProxyImagem(path) };
 }
 
 // =====================================================================
@@ -174,37 +196,52 @@ export function ehUrlStorageCatalogo(url: string | null): boolean {
 
 export type ResultadoReparoUrls = {
   produtosValidados: number;
-  produtosRegenerados: number;
+  produtosConvertidos: number; // signed/public → proxy
   produtosNulados: number;
   categoriasValidadas: number;
-  categoriasRegeneradas: number;
+  categoriasConvertidas: number;
   categoriasNuladas: number;
   falhas: number;
   erros: string[];
   exemplosNulados: string[];
 };
 
+/** Verifica se o arquivo realmente existe no bucket. */
+async function arquivoExisteNoBucket(path: string): Promise<boolean> {
+  try {
+    const admin = createSupabaseAdmin();
+    const ultimoSlash = path.lastIndexOf("/");
+    const dir = ultimoSlash >= 0 ? path.slice(0, ultimoSlash) : "";
+    const nome = ultimoSlash >= 0 ? path.slice(ultimoSlash + 1) : path;
+    const { data } = await admin.storage.from(BUCKET_CATALOGO).list(dir, {
+      search: nome,
+      limit: 1,
+    });
+    return !!data?.find((f) => f.name === nome);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Valida TODAS as URLs salvas em produtos.imagem_url e categorias.imagem_url.
  * Pra cada uma:
- *   1. Faz HEAD pra ver se ainda funciona.
- *   2. Se funcionar, deixa quieto.
- *   3. Se nao funcionar e for URL do bucket "catalogo": extrai o path,
- *      regenera signed URL fresca, testa. Se funcionar, atualiza no banco.
- *   4. Se mesmo a nova signed URL falhar (arquivo nao existe mais, etc),
- *      seta imagem_url = NULL — assim o site cai pro fallback do mapa
- *      local (/public/products/<slug>.jpg) e a foto volta a aparecer.
- *   5. Pra URLs que nao sao do supabase storage e estao quebradas, tambem
- *      seta NULL.
+ *   1. Se ja eh URL do proxy (/api/imagem-storage/) — confere se arquivo
+ *      existe no bucket. Se sim, valida; se nao, nula.
+ *   2. Se eh signed/public/render URL do supabase pro bucket: extrai o
+ *      path, confere se arquivo existe, e converte pra URL do proxy.
+ *   3. Se eh URL externa qualquer: HEAD; se 2xx valida, senao nula.
+ *   4. Nulado = imagem_url = NULL, fazendo o site cair no fallback do
+ *      mapa local (/public/products/<slug>.jpg).
  */
 export async function validarERepararUrlsImagens(): Promise<ResultadoReparoUrls> {
   const admin = createSupabaseAdmin();
   const out: ResultadoReparoUrls = {
     produtosValidados: 0,
-    produtosRegenerados: 0,
+    produtosConvertidos: 0,
     produtosNulados: 0,
     categoriasValidadas: 0,
-    categoriasRegeneradas: 0,
+    categoriasConvertidas: 0,
     categoriasNuladas: 0,
     falhas: 0,
     erros: [],
@@ -217,13 +254,13 @@ export async function validarERepararUrlsImagens(): Promise<ResultadoReparoUrls>
     {
       nome: "produtos",
       onValidado: () => out.produtosValidados++,
-      onRegenerado: () => out.produtosRegenerados++,
+      onConvertido: () => out.produtosConvertidos++,
       onNulado: () => out.produtosNulados++,
     },
     {
       nome: "categorias",
       onValidado: () => out.categoriasValidadas++,
-      onRegenerado: () => out.categoriasRegeneradas++,
+      onConvertido: () => out.categoriasConvertidas++,
       onNulado: () => out.categoriasNuladas++,
     },
   ] as const;
@@ -237,35 +274,51 @@ export async function validarERepararUrlsImagens(): Promise<ResultadoReparoUrls>
       out.erros.push(`${t.nome}: ${error.message}`);
       continue;
     }
+
     for (const row of data ?? []) {
       const url = (row.imagem_url as string | null)?.trim();
-      if (!url || !/^https?:\/\//i.test(url)) continue;
+      if (!url) continue;
 
-      if (await urlAcessivel(url)) {
+      const pathProxy = pathDaUrlProxy(url);
+      const pathBucket = pathDaUrlPublica(url);
+      const path = pathProxy ?? pathBucket;
+
+      if (path) {
+        // URL do nosso bucket (proxy ou supabase direct) — confere se
+        // arquivo existe no storage. Se existe, converte pra URL do
+        // proxy (idempotente). Se nao existe, nula.
+        if (await arquivoExisteNoBucket(path)) {
+          const urlProxy = urlProxyImagem(path);
+          if (url === urlProxy) {
+            t.onValidado();
+          } else {
+            const { error: errUpd } = await admin
+              .from(t.nome)
+              .update({ imagem_url: urlProxy })
+              .eq("id", row.id);
+            if (errUpd) {
+              out.falhas++;
+              out.erros.push(`${t.nome}#${row.id}: update falhou ${errUpd.message}`);
+            } else {
+              t.onConvertido();
+            }
+          }
+          continue;
+        }
+        // Path do bucket mas arquivo nao existe — nula
+      } else if (/^https?:\/\//i.test(url)) {
+        // URL externa — valida com HEAD
+        if (await urlAcessivel(url)) {
+          t.onValidado();
+          continue;
+        }
+      } else {
+        // Path relativo nao reconhecido — deixa quieto
         t.onValidado();
         continue;
       }
 
-      // URL quebrada — tenta regenerar se for do nosso bucket
-      const path = pathDaUrlPublica(url);
-      if (path) {
-        const signed = await gerarSignedUrlLongaCatalogo(path);
-        if (signed && (await urlAcessivel(signed))) {
-          const { error: errUpd } = await admin
-            .from(t.nome)
-            .update({ imagem_url: signed })
-            .eq("id", row.id);
-          if (errUpd) {
-            out.falhas++;
-            out.erros.push(`${t.nome}#${row.id}: update falhou ${errUpd.message}`);
-          } else {
-            t.onRegenerado();
-          }
-          continue;
-        }
-      }
-
-      // Nem regenerou — nula pra cair no fallback local pelo slug
+      // Quebrada/nao recuperavel — nula
       const { error: errNull } = await admin
         .from(t.nome)
         .update({ imagem_url: null })
@@ -285,16 +338,6 @@ export async function validarERepararUrlsImagens(): Promise<ResultadoReparoUrls>
   return out;
 }
 
-/** @deprecated use validarERepararUrlsImagens */
-export async function migrarUrlsPublicasParaSigned() {
-  const r = await validarERepararUrlsImagens();
-  return {
-    produtosMigrados: r.produtosRegenerados,
-    categoriasMigradas: r.categoriasRegeneradas,
-    falhas: r.falhas,
-    erros: r.erros,
-  };
-}
 
 // =====================================================================
 // Diagnostico — usado pelo botao de reparo pra mostrar info detalhada

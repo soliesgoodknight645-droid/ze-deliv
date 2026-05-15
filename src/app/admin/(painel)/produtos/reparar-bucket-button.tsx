@@ -35,11 +35,11 @@ export function RepararBucketButton() {
       const r = await repararBucketImagens();
       setResultado(r);
       setAberto(true);
-      const totalRegen = r.reparo.produtosRegenerados + r.reparo.categoriasRegeneradas;
+      const totalConv = r.reparo.produtosConvertidos + r.reparo.categoriasConvertidas;
       const totalNul = r.reparo.produtosNulados + r.reparo.categoriasNuladas;
-      if (totalRegen > 0 || totalNul > 0) {
+      if (totalConv > 0 || totalNul > 0) {
         toast.success(
-          `${totalRegen} URLs regeneradas, ${totalNul} limpas pra usar foto local. Veja detalhes →`,
+          `${totalConv} URLs convertidas pro proxy, ${totalNul} limpas pra usar foto local. Veja detalhes →`,
           { duration: 8000 },
         );
       } else if (r.ok) {
@@ -128,14 +128,14 @@ function PainelDiagnostico({ r }: { r: Resultado }) {
       <p>
         Produtos OK:{" "}
         <strong className="text-green-700">{r.reparo.produtosValidados}</strong> ·
-        regeneradas: <strong className="text-brand-dark">{r.reparo.produtosRegenerados}</strong>{" "}
+        convertidas: <strong className="text-brand-dark">{r.reparo.produtosConvertidos}</strong>{" "}
         · limpas (volta foto local):{" "}
         <strong className="text-orange-700">{r.reparo.produtosNulados}</strong>
       </p>
       <p>
         Categorias OK:{" "}
         <strong className="text-green-700">{r.reparo.categoriasValidadas}</strong> ·
-        regeneradas: <strong className="text-brand-dark">{r.reparo.categoriasRegeneradas}</strong>{" "}
+        convertidas: <strong className="text-brand-dark">{r.reparo.categoriasConvertidas}</strong>{" "}
         · limpas:{" "}
         <strong className="text-orange-700">{r.reparo.categoriasNuladas}</strong>
       </p>

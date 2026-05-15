@@ -170,7 +170,13 @@ function urlPorTokens(slug: string): string | null {
 }
 
 export function urlImagemProduto(slug: string, imagemUrl: string | null): string | null {
-  if (imagemUrl && /^https?:\/\//i.test(imagemUrl)) return imagemUrl;
+  if (imagemUrl) {
+    // URL absoluta (https://...)
+    if (/^https?:\/\//i.test(imagemUrl)) return imagemUrl;
+    // URL do nosso proxy de imagem (relativa) — funciona tanto em dev
+    // quanto em prod, independente do NEXT_PUBLIC_SITE_URL
+    if (imagemUrl.startsWith("/api/imagem-storage/")) return imagemUrl;
+  }
 
   const catalogo = imagemCatalogoPorSlug(slug);
   if (catalogo) return catalogo;
