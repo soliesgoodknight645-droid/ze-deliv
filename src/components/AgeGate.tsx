@@ -1,10 +1,23 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { usePathname } from "next/navigation";
 
 const CHAVE = "ze:idade-confirmada:v1";
 
+// Rotas que NAO mostram o age-gate: sao paginas institucionais sem qualquer
+// referencia a bebida alcoolica/tabaco (ex.: vertical de gas e agua).
+const ROTAS_SEM_AGE_GATE = ["/gaseagua"];
+
+function rotaPulaAgeGate(pathname: string | null): boolean {
+  if (!pathname) return false;
+  return ROTAS_SEM_AGE_GATE.some(
+    (rota) => pathname === rota || pathname.startsWith(`${rota}/`),
+  );
+}
+
 export function AgeGate() {
+  const pathname = usePathname();
   const [confirmado, setConfirmado] = useState<boolean | null>(null);
 
   useEffect(() => {
@@ -15,6 +28,7 @@ export function AgeGate() {
     }
   }, []);
 
+  if (rotaPulaAgeGate(pathname)) return null;
   if (confirmado === null || confirmado) return null;
 
   const aceitar = () => {
