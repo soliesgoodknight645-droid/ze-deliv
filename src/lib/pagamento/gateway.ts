@@ -4,6 +4,7 @@ import * as otp from "@/lib/onetimepay";
 import * as mbb from "@/lib/marchabb";
 import * as cp from "@/lib/centurionpay";
 import * as hz from "@/lib/hyzepay";
+import * as pm from "@/lib/promst";
 import { createSupabaseAdmin } from "@/lib/supabase/admin";
 import { gerarQrCodeDataUrl } from "./qrcode";
 
@@ -33,16 +34,33 @@ import { gerarQrCodeDataUrl } from "./qrcode";
 // nao desperdicar o tempo de checkout do cliente em algo que ja esta down.
 // =====================================================================
 
-export type GatewayId = "onetimepay" | "marchabb" | "centurionpay" | "hyzepay";
+export type GatewayId =
+  | "onetimepay"
+  | "marchabb"
+  | "centurionpay"
+  | "hyzepay"
+  | "promst";
 
-const GATEWAY_IDS: GatewayId[] = ["onetimepay", "marchabb", "centurionpay", "hyzepay"];
+const GATEWAY_IDS: GatewayId[] = [
+  "onetimepay",
+  "marchabb",
+  "centurionpay",
+  "hyzepay",
+  "promst",
+];
 
 /**
  * Ordem de prioridade canonica usada pra montar a fila de failover.
- * Os 3 primeiros sao "tier 1" (melhor taxa/conversao). CenturionPay fica
+ * Os primeiros sao "tier 1" (melhor taxa/conversao). CenturionPay fica
  * por ultimo como fallback de emergencia.
  */
-const PRIORIDADE_FAILOVER: GatewayId[] = ["marchabb", "onetimepay", "hyzepay", "centurionpay"];
+const PRIORIDADE_FAILOVER: GatewayId[] = [
+  "marchabb",
+  "onetimepay",
+  "hyzepay",
+  "promst",
+  "centurionpay",
+];
 
 export const GATEWAYS_DISPONIVEIS: { id: GatewayId; label: string; descricao: string }[] = [
   {
@@ -59,6 +77,11 @@ export const GATEWAYS_DISPONIVEIS: { id: GatewayId; label: string; descricao: st
     id: "hyzepay",
     label: "HyzePay",
     descricao: "Gateway PIX — Basic Auth (public:secret), valor em centavos",
+  },
+  {
+    id: "promst",
+    label: "Promst",
+    descricao: "Gateway PIX simples (só user_id + valor, mínimo R$ 3,00; sem dados do cliente)",
   },
   {
     id: "centurionpay",
@@ -205,6 +228,7 @@ export function webhookUrlParaGateway(gateway: GatewayId): string | undefined {
   if (gateway === "marchabb") return `${base}/api/pagamento/webhook/marchabb`;
   if (gateway === "centurionpay") return `${base}/api/pagamento/webhook/centurionpay`;
   if (gateway === "hyzepay") return `${base}/api/pagamento/webhook/hyzepay`;
+  if (gateway === "promst") return `${base}/api/pagamento/webhook/promst`;
   return `${base}/api/pagamento/webhook`;
 }
 
@@ -555,6 +579,28 @@ async function tentarPixNoGateway(
     };
   }
 
+  if (gateway === "promst") {
+    // Promst — gateway "minimalista": so user_id + valor. NAO envia dados do
+    // cliente nem postback (confirmacao vem pelo polling do /api/pagamento/status).
+    // O `qrcode_base64` ja vem pronto, entao economizamos a geracao local.
+    const r = await pm.criarCobrancaPix({
+      identifier: input.identifier,
+      amount: input.amount,
+    });
+    return {
+      gateway,
+      transactionId: r.id,
+      gatewayStatus: r.status,
+      pix: {
+        code: r.pix.qrcode,
+        image: null,
+        base64: r.pix.base64 || (await gerarQrCodeDataUrl(r.pix.qrcode)),
+      },
+      orderUrl: null,
+      receiptUrl: null,
+    };
+  }
+
   if (gateway === "hyzepay") {
     // HyzePay — qrcode em texto, sem URL "segura" propria
     const r = await hz.criarCobrancaPix({
@@ -747,6 +793,17 @@ export async function consultarStatusPedido(pedido: {
     };
   }
 
+  if (gateway === "promst") {
+    if (!pedido.gateway_id) return null;
+    const t = await pm.consultarTransacaoPorId(pedido.gateway_id);
+    if (!t?.status) return null;
+    return {
+      gatewayStatus: t.status,
+      statusInterno: pm.mapearStatusPedido(t.status),
+      transactionId: String(t.id),
+    };
+  }
+
   // CenturionPay
   if (!pedido.gateway_id) return null;
   const t = await cp.consultarTransacaoPorId(pedido.gateway_id);
@@ -763,6 +820,7 @@ export function mapearStatusInterno(gateway: GatewayId, statusCrua: string): str
   if (gateway === "onetimepay") return otp.mapearStatusPedido(statusCrua);
   if (gateway === "marchabb") return mbb.mapearStatusPedido(statusCrua);
   if (gateway === "hyzepay") return hz.mapearStatusPedido(statusCrua);
+  if (gateway === "promst") return pm.mapearStatusPedido(statusCrua);
   return cp.mapearStatusPedido(statusCrua);
 }
 
