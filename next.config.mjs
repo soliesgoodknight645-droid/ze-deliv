@@ -11,6 +11,18 @@ const nextConfig = {
       { protocol: "https", hostname: "**" },
     ],
   },
+  // A pagina institucional vive em /gaseagua, mas como a categoria se chama
+  // "Água e Gás" eh natural digitar /aguaegas. Redireciona as variacoes mais
+  // comuns pra rota canonica, pra ninguem cair em 404.
+  async redirects() {
+    return [
+      { source: "/aguaegas", destination: "/gaseagua", permanent: true },
+      { source: "/agua-e-gas", destination: "/gaseagua", permanent: true },
+      { source: "/gas-e-agua", destination: "/gaseagua", permanent: true },
+      { source: "/agua", destination: "/gaseagua", permanent: false },
+      { source: "/gas", destination: "/gaseagua", permanent: false },
+    ];
+  },
 };
 
 export default nextConfig;
