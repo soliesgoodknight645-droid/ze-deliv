@@ -99,9 +99,13 @@ export async function limparCooldown(
 }
 
 /**
- * Faz uma chamada PIX de R$1 no gateway especificado pra ver se ele
+ * Faz uma chamada PIX de R$3 no gateway especificado pra ver se ele
  * esta funcionando. Usa dados ficticios pra teste; o pedido NAO eh
  * salvo na base de pedidos — eh chamada direta no SDK.
+ *
+ * O valor eh R$3 (e nao R$1) porque a Promst exige minimo de R$3,00 por
+ * cobranca. Os demais gateways aceitam R$3 sem problema. O PIX gerado eh
+ * so de diagnostico — ninguem paga, entao o valor nao tem efeito real.
  */
 export async function testarGateway(
   gateway: GatewayId,
@@ -122,7 +126,7 @@ export async function testarGateway(
 
   const r = await testarApenasGateway(gateway, {
     identifier: `TESTE-${Date.now()}`,
-    amount: 1,
+    amount: 3,
     client: {
       name: "Teste Admin",
       email: "teste@example.com",
@@ -140,9 +144,9 @@ export async function testarGateway(
     itens: [
       {
         id: "teste",
-        nome: "Teste de gateway (R$1)",
+        nome: "Teste de gateway (R$3)",
         quantidade: 1,
-        precoUnitario: 1,
+        precoUnitario: 3,
       },
     ],
     metadata: { teste_diagnostico: true, por: userData.user.email ?? "?" },
