@@ -7,7 +7,7 @@ const CHAVE = "ze:idade-confirmada:v1";
 
 // Rotas que NAO mostram o age-gate: sao paginas institucionais sem qualquer
 // referencia a bebida alcoolica/tabaco (ex.: vertical de gas e agua).
-const ROTAS_SEM_AGE_GATE = ["/gaseagua"];
+const ROTAS_SEM_AGE_GATE = ["/gaseagua", "/gas"];
 
 function rotaPulaAgeGate(pathname: string | null): boolean {
   if (!pathname) return false;

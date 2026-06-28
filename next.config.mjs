@@ -20,7 +20,6 @@ const nextConfig = {
       { source: "/agua-e-gas", destination: "/gaseagua", permanent: true },
       { source: "/gas-e-agua", destination: "/gaseagua", permanent: true },
       { source: "/agua", destination: "/gaseagua", permanent: false },
-      { source: "/gas", destination: "/gaseagua", permanent: false },
     ];
   },
 };
