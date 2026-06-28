@@ -8,6 +8,7 @@ import {
   calcularDescontoUpsell,
   validarSubtotalUpsell,
 } from "@/lib/cupom-upsell";
+import { pedidoStatusEhPosPagamento } from "@/lib/pedido-status";
 
 export type ItemUpsellInput = {
   produtoId: string;
@@ -98,12 +99,24 @@ export async function criarPedidoUpsell(
   if (!ref) {
     return { ok: false, erro: "Pedido de referencia nao encontrado" };
   }
-  if (ref.status !== "pago" && ref.status !== "concluido") {
+  // Aceita qualquer status pos-pagamento (pago, em_separacao, em_entrega,
+  // concluido). Antes so aceitava pago/concluido — se o admin movia o pedido
+  // no funil, o cupom quebrava com "nao esta pago".
+  if (!pedidoStatusEhPosPagamento(ref.status as string)) {
     return { ok: false, erro: "Pedido de referencia nao esta pago" };
   }
-  const idadeMs = Date.now() - new Date((ref.paid_at ?? ref.criado_em) as string).getTime();
-  if (idadeMs > 24 * 60 * 60 * 1000) {
-    return { ok: false, erro: "Cupom expirado (mais de 24h)" };
+  // Validade do cupom: 24h a partir do PAGAMENTO (paid_at). Medir por
+  // `criado_em` estava ERRADO — um pedido criado ha >24h mas pago agora caia
+  // como "Cupom expirado" mesmo recem-resgatado. Se paid_at nao estiver
+  // gravado (alguns gateways nao mandam a data no webhook), NAO bloqueamos por
+  // tempo: o status ja confirma que foi pago e o cliente ja tem o limite de
+  // 24h no proprio aparelho (localStorage). Melhor liberar do que recusar
+  // um comprador real por falta de timestamp.
+  if (ref.paid_at) {
+    const idadeMs = Date.now() - new Date(ref.paid_at as string).getTime();
+    if (idadeMs > CUPOM_UPSELL.DURACAO_MS) {
+      return { ok: false, erro: "Cupom expirado (mais de 24h)" };
+    }
   }
 
   // Subtotal do upsell (sem desconto)
