@@ -1,6 +1,13 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   images: {
+    // Otimizador da Vercel DESLIGADO: o plano gratuito estourou a cota de
+    // otimizacao (erro 402 OPTIMIZED_IMAGE_REQUEST_PAYMENT_REQUIRED em todo
+    // /_next/image), o que derrubou TODAS as fotos do site em producao.
+    // Com unoptimized, o next/image vira <img> direto pro src — nossas fotos
+    // ja vem do proxy /api/imagem-storage (cache de 1 ano) ou de CDNs
+    // externos, entao a perda eh so o resize/webp automatico.
+    unoptimized: true,
     remotePatterns: [
       { protocol: "https", hostname: "**.tabacariadamata.com.br" },
       { protocol: "https", hostname: "i.ibb.co" },
