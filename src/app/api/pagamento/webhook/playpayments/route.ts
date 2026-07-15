@@ -103,6 +103,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, ignorado: true, motivo: "evento de saque" });
   }
 
+  // ATENCAO: a Play Payments IGNORA o external_id que enviamos e gera um UUID
+  // proprio. Ou seja, o `external_id` do webhook NAO eh o nosso pedido.numero —
+  // a busca por numero abaixo quase sempre falha pra esse gateway, e o match
+  // real acontece pelo transaction_id (salvo como gateway_id na criacao).
   let pedidoId: string | null = null;
   if (identifier) {
     const { data: ped } = await sb
@@ -112,7 +116,7 @@ export async function POST(req: NextRequest) {
       .maybeSingle();
     pedidoId = ped?.id ?? null;
   }
-  // Se vier so o transaction_id (sem external_id), tenta achar por gateway_id
+  // Play Payments: match principal eh por gateway_id (transaction_id).
   if (!pedidoId && transactionId) {
     const { data: ped } = await sb
       .from("pedidos")
