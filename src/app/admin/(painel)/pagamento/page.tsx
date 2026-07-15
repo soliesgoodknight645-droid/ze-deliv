@@ -37,6 +37,7 @@ export default async function PagamentoPage() {
   // Promst nao usa chave secreta — so um user_id, que tem default sandbox
   // hardcoded (8758220378). Entao esta sempre "configurado", mesmo sem env.
   const promstConfigurado = true;
+  const playpaymentsConfigurado = !!process.env.PLAYPAYMENTS_SECRET_KEY;
 
   const configPorId: Record<string, boolean> = {
     onetimepay: onetimepayConfigurado,
@@ -44,6 +45,7 @@ export default async function PagamentoPage() {
     hyzepay: hyzepayConfigurado,
     centurionpay: centurionpayConfigurado,
     promst: promstConfigurado,
+    playpayments: playpaymentsConfigurado,
   };
 
   const statusPorId = new Map(statusFailover.map((s) => [s.gateway, s]));

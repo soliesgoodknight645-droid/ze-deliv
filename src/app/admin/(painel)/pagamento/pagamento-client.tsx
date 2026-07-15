@@ -307,6 +307,12 @@ export function PagamentoClient({ gatewayAtivo, gateways, metodos }: Props) {
                     </code>{" "}
                     — CenturionPay
                   </li>
+                  <li>
+                    <code className="bg-yellow-100 px-1 rounded">
+                      /api/pagamento/webhook/playpayments
+                    </code>{" "}
+                    — Play Payments (em Configurações → Webhooks no painel deles)
+                  </li>
                 </ul>
               </li>
               <li>Pedidos antigos não migram — eles continuam usando o gateway que os criou.</li>
