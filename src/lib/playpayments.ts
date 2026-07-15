@@ -1,4 +1,5 @@
 import "server-only";
+import crypto from "node:crypto";
 
 // =============================================================================
 // Cliente PlayPayments — gateway PIX brasileiro
@@ -225,6 +226,111 @@ export async function consultarTransacaoPorId(id: string): Promise<ConsultarTran
     paidAt: resp.paid_at ?? null,
     amount: typeof resp.amount === "number" ? resp.amount : undefined,
   };
+}
+
+// =============== WEBHOOK — VERIFICACAO DE ASSINATURA ===============
+//
+// A doc publica da Play Payments NAO descreve o formato/header da assinatura
+// do webhook, mas eles fornecem um signing secret `whsec_...`. Seguindo o
+// padrao de mercado (GoatPay, Polp, Stripe-like), assumimos HMAC-SHA256 sobre
+// o RAW BODY, com a assinatura em algum header conhecido, em um destes
+// formatos:
+//   - "sha256=<hex>"           (GoatPay/Polp)
+//   - "<hex>" puro
+//   - "t=<unix>,v1=<hex>"      (Stripe-like: HMAC de `${t}.${rawBody}`)
+//
+// Como nao temos certeza do header exato, esta funcao eh TOLERANTE: so
+// consegue "verificar" quando acha um header reconhecido que bate. O caller
+// decide o que fazer (por padrao NAO bloqueia, so loga — pra nao perder
+// confirmacao de pagamento real caso o esquema real seja diferente do
+// assumido; a confirmacao por polling continua como rede de seguranca).
+
+const HEADERS_ASSINATURA = [
+  "x-playpayments-signature",
+  "x-play-signature",
+  "x-webhook-signature",
+  "x-signature",
+  "webhook-signature",
+  "signature",
+];
+
+export type ResultadoAssinatura = {
+  /** true => header encontrado E assinatura confere */
+  valido: boolean;
+  /** motivo/estado pra log ("sem_secret" | "sem_header" | "invalida" | "ok") */
+  motivo: string;
+  /** header que casou (se algum) */
+  header?: string;
+};
+
+function compararHmacConstante(esperadoHex: string, recebido: string): boolean {
+  // recebido pode vir em hex ou base64 — tenta os dois.
+  const esperadoBuf = Buffer.from(esperadoHex, "hex");
+  const candidatos: Buffer[] = [];
+  if (/^[0-9a-f]+$/i.test(recebido)) candidatos.push(Buffer.from(recebido, "hex"));
+  try {
+    candidatos.push(Buffer.from(recebido, "base64"));
+  } catch {
+    // ignora
+  }
+  return candidatos.some(
+    (b) => b.length === esperadoBuf.length && crypto.timingSafeEqual(b, esperadoBuf),
+  );
+}
+
+/**
+ * Verifica a assinatura HMAC-SHA256 do webhook (best-effort — ver comentario
+ * acima). `headers` deve ser um objeto com as chaves em lowercase.
+ */
+export function verificarAssinaturaWebhook(
+  rawBody: string,
+  headers: Record<string, string | undefined>,
+): ResultadoAssinatura {
+  const secret = process.env.PLAYPAYMENTS_WEBHOOK_SECRET;
+  if (!secret) return { valido: false, motivo: "sem_secret" };
+
+  let headerNome: string | undefined;
+  let headerValor: string | undefined;
+  for (const h of HEADERS_ASSINATURA) {
+    const v = headers[h];
+    if (v) {
+      headerNome = h;
+      headerValor = v;
+      break;
+    }
+  }
+  if (!headerValor) return { valido: false, motivo: "sem_header" };
+
+  // Formato Stripe-like: "t=<unix>,v1=<hex>[,v1=<hex>]"
+  if (/(^|,)\s*t=/.test(headerValor) && /v1=/.test(headerValor)) {
+    const partes = Object.fromEntries(
+      headerValor.split(",").map((kv) => {
+        const [k, ...rest] = kv.trim().split("=");
+        return [k, rest.join("=")];
+      }),
+    ) as Record<string, string>;
+    const t = partes["t"];
+    const assinaturas = headerValor
+      .split(",")
+      .filter((kv) => kv.trim().startsWith("v1="))
+      .map((kv) => kv.trim().slice(3));
+    if (t) {
+      const esperado = crypto
+        .createHmac("sha256", secret)
+        .update(`${t}.${rawBody}`)
+        .digest("hex");
+      const ok = assinaturas.some((sig) => compararHmacConstante(esperado, sig));
+      return { valido: ok, motivo: ok ? "ok" : "invalida", header: headerNome };
+    }
+  }
+
+  // Formato simples: "sha256=<hex>" ou "<hex/base64>" puro, HMAC do raw body.
+  const recebido = headerValor.startsWith("sha256=")
+    ? headerValor.slice("sha256=".length)
+    : headerValor;
+  const esperado = crypto.createHmac("sha256", secret).update(rawBody).digest("hex");
+  const ok = compararHmacConstante(esperado, recebido.trim());
+  return { valido: ok, motivo: ok ? "ok" : "invalida", header: headerNome };
 }
 
 /**

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createSupabaseAdmin } from "@/lib/supabase/admin";
-import { mapearStatusPedido } from "@/lib/playpayments";
+import { mapearStatusPedido, verificarAssinaturaWebhook } from "@/lib/playpayments";
 import { broadcastStatusPedido } from "@/lib/realtime-pedido";
 import { revalidateTag } from "next/cache";
 
@@ -75,6 +75,25 @@ export async function POST(req: NextRequest) {
   } catch (e) {
     console.error("[webhook/playpayments] body invalido", e);
     return NextResponse.json({ ok: false, erro: "body invalido" }, { status: 400 });
+  }
+
+  // Verificacao de assinatura (best-effort — ver comentario em playpayments.ts).
+  // Por padrao NAO bloqueia (so loga), pra nao perder confirmacao de pagamento
+  // caso o esquema real difira do assumido. Ative PLAYPAYMENTS_WEBHOOK_STRICT=true
+  // depois de confirmar nos logs qual header/formato a Play Payments usa.
+  const headersLower: Record<string, string | undefined> = {};
+  req.headers.forEach((v, k) => {
+    headersLower[k.toLowerCase()] = v;
+  });
+  const assinatura = verificarAssinaturaWebhook(raw, headersLower);
+  const strict = process.env.PLAYPAYMENTS_WEBHOOK_STRICT === "true";
+  console.log(
+    `[webhook/playpayments] assinatura=${assinatura.motivo}${
+      assinatura.header ? ` header=${assinatura.header}` : ""
+    } strict=${strict}`,
+  );
+  if (strict && assinatura.motivo === "invalida") {
+    return NextResponse.json({ ok: false, erro: "assinatura invalida" }, { status: 401 });
   }
 
   const { evento, identifier, transactionId, statusCru, paidAt } = normalizarPayload(payload);
