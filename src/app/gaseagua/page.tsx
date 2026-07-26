@@ -3,6 +3,7 @@ import { Clock, Flame, Droplets, ShieldCheck, Truck } from "lucide-react";
 import { Header } from "@/components/Header";
 import { FooterGasAgua } from "@/components/FooterGasAgua";
 import { ProductCard } from "@/components/ProductCard";
+import { CidadeCliente } from "@/components/CidadeCliente";
 import { listarProdutos } from "@/lib/data";
 import type { Produto } from "@/lib/types";
 
@@ -118,7 +119,7 @@ export default async function GasEAguaPage() {
             </h1>
             <p className="mt-2 text-sm text-brand-dark/80 leading-relaxed max-w-md">
               Botijão de gás (P5 e P13) e água mineral entregues por
-              distribuidoras parceiras em Palmeira dos Índios/AL. Sem
+              distribuidoras parceiras em <CidadeCliente />. Sem
               assinatura, sem mensalidade — pediu, chegou.
             </p>
 
