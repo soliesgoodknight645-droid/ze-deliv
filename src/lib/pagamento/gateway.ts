@@ -4,7 +4,6 @@ import * as otp from "@/lib/onetimepay";
 import * as mbb from "@/lib/marchabb";
 import * as cp from "@/lib/centurionpay";
 import * as hz from "@/lib/hyzepay";
-import * as pm from "@/lib/promst";
 import * as pp from "@/lib/playpayments";
 import { createSupabaseAdmin } from "@/lib/supabase/admin";
 import { gerarQrCodeDataUrl } from "./qrcode";
@@ -40,7 +39,6 @@ export type GatewayId =
   | "marchabb"
   | "centurionpay"
   | "hyzepay"
-  | "promst"
   | "playpayments";
 
 const GATEWAY_IDS: GatewayId[] = [
@@ -48,7 +46,6 @@ const GATEWAY_IDS: GatewayId[] = [
   "marchabb",
   "centurionpay",
   "hyzepay",
-  "promst",
   "playpayments",
 ];
 
@@ -62,7 +59,6 @@ const PRIORIDADE_FAILOVER: GatewayId[] = [
   "onetimepay",
   "hyzepay",
   "playpayments",
-  "promst",
   "centurionpay",
 ];
 
@@ -81,11 +77,6 @@ export const GATEWAYS_DISPONIVEIS: { id: GatewayId; label: string; descricao: st
     id: "hyzepay",
     label: "HyzePay",
     descricao: "Gateway PIX — Basic Auth (public:secret), valor em centavos",
-  },
-  {
-    id: "promst",
-    label: "Promst",
-    descricao: "Gateway PIX simples (só user_id + valor, mínimo R$ 3,00; sem dados do cliente)",
   },
   {
     id: "playpayments",
@@ -237,7 +228,6 @@ export function webhookUrlParaGateway(gateway: GatewayId): string | undefined {
   if (gateway === "marchabb") return `${base}/api/pagamento/webhook/marchabb`;
   if (gateway === "centurionpay") return `${base}/api/pagamento/webhook/centurionpay`;
   if (gateway === "hyzepay") return `${base}/api/pagamento/webhook/hyzepay`;
-  if (gateway === "promst") return `${base}/api/pagamento/webhook/promst`;
   if (gateway === "playpayments") return `${base}/api/pagamento/webhook/playpayments`;
   return `${base}/api/pagamento/webhook`;
 }
@@ -589,28 +579,6 @@ async function tentarPixNoGateway(
     };
   }
 
-  if (gateway === "promst") {
-    // Promst — gateway "minimalista": so user_id + valor. NAO envia dados do
-    // cliente nem postback (confirmacao vem pelo polling do /api/pagamento/status).
-    // O `qrcode_base64` ja vem pronto, entao economizamos a geracao local.
-    const r = await pm.criarCobrancaPix({
-      identifier: input.identifier,
-      amount: input.amount,
-    });
-    return {
-      gateway,
-      transactionId: r.id,
-      gatewayStatus: r.status,
-      pix: {
-        code: r.pix.qrcode,
-        image: null,
-        base64: r.pix.base64 || (await gerarQrCodeDataUrl(r.pix.qrcode)),
-      },
-      orderUrl: null,
-      receiptUrl: null,
-    };
-  }
-
   if (gateway === "playpayments") {
     // Play Payments — qrcode em texto (pix_code copia-e-cola). O webhook NAO
     // eh configurado por request: eh global, no painel deles (Configuracoes ->
@@ -833,17 +801,6 @@ export async function consultarStatusPedido(pedido: {
     };
   }
 
-  if (gateway === "promst") {
-    if (!pedido.gateway_id) return null;
-    const t = await pm.consultarTransacaoPorId(pedido.gateway_id);
-    if (!t?.status) return null;
-    return {
-      gatewayStatus: t.status,
-      statusInterno: pm.mapearStatusPedido(t.status),
-      transactionId: String(t.id),
-    };
-  }
-
   if (gateway === "playpayments") {
     if (!pedido.gateway_id) return null;
     const t = await pp.consultarTransacaoPorId(pedido.gateway_id);
@@ -871,7 +828,6 @@ export function mapearStatusInterno(gateway: GatewayId, statusCrua: string): str
   if (gateway === "onetimepay") return otp.mapearStatusPedido(statusCrua);
   if (gateway === "marchabb") return mbb.mapearStatusPedido(statusCrua);
   if (gateway === "hyzepay") return hz.mapearStatusPedido(statusCrua);
-  if (gateway === "promst") return pm.mapearStatusPedido(statusCrua);
   if (gateway === "playpayments") return pp.mapearStatusPedido(statusCrua);
   return cp.mapearStatusPedido(statusCrua);
 }

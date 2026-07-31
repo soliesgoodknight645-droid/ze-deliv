@@ -103,9 +103,9 @@ export async function limparCooldown(
  * esta funcionando. Usa dados ficticios pra teste; o pedido NAO eh
  * salvo na base de pedidos — eh chamada direta no SDK.
  *
- * O valor eh R$3 (e nao R$1) porque a Promst exige minimo de R$3,00 por
- * cobranca. Os demais gateways aceitam R$3 sem problema. O PIX gerado eh
- * so de diagnostico — ninguem paga, entao o valor nao tem efeito real.
+ * O valor eh R$3 (e nao R$1) por seguranca — alguns gateways exigem minimo
+ * de ~R$3,00 por cobranca. O PIX gerado eh so de diagnostico — ninguem paga,
+ * entao o valor nao tem efeito real.
  */
 export async function testarGateway(
   gateway: GatewayId,
