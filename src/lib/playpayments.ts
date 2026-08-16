@@ -39,7 +39,7 @@ function getConfig(): PlayPaymentsConfig {
     );
   }
   return {
-    baseUrl: process.env.PLAYPAYMENTS_API_URL || DEFAULT_BASE_URL,
+    baseUrl: (process.env.PLAYPAYMENTS_API_URL || DEFAULT_BASE_URL).replace(/\/$/, ""),
     secretKey,
   };
 }
@@ -50,7 +50,38 @@ function authHeaders(): Record<string, string> {
     Authorization: `Bearer ${cfg.secretKey}`,
     "Content-Type": "application/json",
     Accept: "application/json",
+    // Node/Vercel fetch manda UA de bot; o Cloudflare da Play Payments
+    // responde 403 HTML "Just a moment..." nesses IPs. Header de browser
+    // reduz o challenge (o outro site com a mesma key funciona porque
+    // nao sai de IP de datacenter da Vercel).
+    "User-Agent":
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+    Origin: "https://app.playpayments.com.br",
+    Referer: "https://app.playpayments.com.br/",
   };
+}
+
+function ehDesafioCloudflare(status: number, body: string): boolean {
+  if (status !== 403 && status !== 503) return false;
+  const t = body.slice(0, 800).toLowerCase();
+  return (
+    t.includes("just a moment") ||
+    t.includes("challenges.cloudflare.com") ||
+    t.includes("_cf_chl")
+  );
+}
+
+async function playFetch(path: string, init: Omit<RequestInit, "headers">): Promise<{ res: Response; text: string }> {
+  const cfg = getConfig();
+  const url = `${cfg.baseUrl}${path.startsWith("/") ? path : `/${path}`}`;
+  const res = await fetch(url, { ...init, headers: authHeaders(), cache: "no-store" });
+  const text = await res.text();
+  if (ehDesafioCloudflare(res.status, text)) {
+    throw new Error(
+      "PlayPayments bloqueada pelo Cloudflare nos IPs da Vercel (desafio 'Just a moment'), nao e a chave. Peca ao suporte da Play Payments para whitelist da API / desligar Bot Fight no /api/pix, ou hospede o checkout fora da Vercel. A mesma key funciona de outro host porque o IP de la nao e desafiado.",
+    );
+  }
+  return { res, text };
 }
 
 // =============== TYPES ===============
@@ -101,9 +132,6 @@ function reaisRedondo(v: number): number {
  * POST /pix — cria uma cobranca PIX
  */
 export async function criarCobrancaPix(input: CriarPixInput): Promise<CriarPixResposta> {
-  const cfg = getConfig();
-  const url = `${cfg.baseUrl}/pix`;
-
   const body: Record<string, unknown> = {
     payment_method: "pix",
     amount: reaisRedondo(input.amount),
@@ -129,16 +157,12 @@ export async function criarCobrancaPix(input: CriarPixInput): Promise<CriarPixRe
     body.customer_ip = input.ip;
   }
 
-  console.log("[playpayments] POST", url, JSON.stringify(body));
+  console.log("[playpayments] POST /pix", JSON.stringify(body));
 
-  const r = await fetch(url, {
+  const { res: r, text } = await playFetch("/pix", {
     method: "POST",
-    headers: authHeaders(),
     body: JSON.stringify(body),
-    cache: "no-store",
   });
-
-  const text = await r.text();
   let data: unknown;
   try {
     data = JSON.parse(text);
@@ -199,10 +223,9 @@ export type ConsultarTransacaoResposta = {
 };
 
 export async function consultarTransacaoPorId(id: string): Promise<ConsultarTransacaoResposta> {
-  const cfg = getConfig();
-  const url = `${cfg.baseUrl}/pix/status/${encodeURIComponent(id)}`;
-  const r = await fetch(url, { headers: authHeaders(), cache: "no-store" });
-  const text = await r.text();
+  const { res: r, text } = await playFetch(`/pix/status/${encodeURIComponent(id)}`, {
+    method: "GET",
+  });
   let data: unknown;
   try {
     data = JSON.parse(text);

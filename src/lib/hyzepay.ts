@@ -13,10 +13,8 @@ import "server-only";
 //
 // Convencoes IMPORTANTES:
 //   - Body em snake_case (postback_url, payment_method, expires_in_days...)
-//   - Valores `amount` e `unit_price` em REAIS DECIMAL (ex.: 120.5 = R$120,50).
-//     A doc tem uma inconsistencia ("Total amount in cents") mas o exemplo
-//     do request, o webhook ("Em reais") e o exemplo de resposta usam
-//     decimal. Adotamos REAIS DECIMAL.
+//   - Valores `amount` e `unit_price` em CENTAVOS INTEGER (ex.: 12050 = R$120,50).
+//     A API .NET recusa decimal em `amount` (erro System.Int32).
 //   - `pix.expires_in_days` (integer) — nao eh data, eh quantidade de dias.
 //   - Resposta vem em `{ data: [{ id, status, pix: [{ qr_code, ... }], ...}] }`
 //     (data eh array, pix tambem eh array aninhado).
@@ -118,6 +116,11 @@ function reaisRedondo(v: number): number {
   return Number(v.toFixed(2));
 }
 
+/** HyzePay espera Int32 em centavos. */
+function centavos(v: number): number {
+  return Math.round(reaisRedondo(v) * 100);
+}
+
 /**
  * Extrai o primeiro item util de um campo que a doc descreve como array.
  * Cobre tambem o caso de a API mandar como objeto direto (alguns
@@ -142,7 +145,7 @@ export async function criarCobrancaPix(input: CriarPixInput): Promise<CriarPixRe
 
   const items = input.items.map((i) => ({
     title: i.title.slice(0, 200),
-    unit_price: reaisRedondo(i.price),
+    unit_price: centavos(i.price),
     quantity: i.quantity,
     tangible: i.tangible ?? true,
     external_ref: input.identifier,
@@ -159,7 +162,7 @@ export async function criarCobrancaPix(input: CriarPixInput): Promise<CriarPixRe
   };
 
   const body: Record<string, unknown> = {
-    amount: reaisRedondo(input.amount),
+    amount: centavos(input.amount),
     payment_method: "pix",
     postback_url: input.postbackUrl ?? "https://example.invalid/webhook",
     customer,
