@@ -43,6 +43,7 @@ const GATEWAY_LABEL: Record<string, string> = {
   onetimepay: "OneTimePay",
   marchabb: "MarchaBB",
   hyzepay: "HyzePay",
+  gestaopay: "GestãoPay",
   playpayments: "Play Payments",
   centurionpay: "CenturionPay",
   teste_cartao: "Modo teste (cartão)",

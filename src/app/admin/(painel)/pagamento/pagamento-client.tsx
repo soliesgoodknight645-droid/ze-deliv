@@ -303,6 +303,12 @@ export function PagamentoClient({ gatewayAtivo, gateways, metodos }: Props) {
                   </li>
                   <li>
                     <code className="bg-yellow-100 px-1 rounded">
+                      /api/pagamento/webhook/gestaopay
+                    </code>{" "}
+                    — GestãoPay
+                  </li>
+                  <li>
+                    <code className="bg-yellow-100 px-1 rounded">
                       /api/pagamento/webhook/centurionpay
                     </code>{" "}
                     — CenturionPay

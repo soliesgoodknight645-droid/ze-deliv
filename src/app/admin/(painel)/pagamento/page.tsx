@@ -31,6 +31,9 @@ export default async function PagamentoPage() {
   const hyzepayConfigurado = !!(
     process.env.HYZEPAY_PUBLIC_KEY && process.env.HYZEPAY_SECRET_KEY
   );
+  const gestaopayConfigurado = !!(
+    process.env.GESTAOPAY_PUBLIC_KEY && process.env.GESTAOPAY_SECRET_KEY
+  );
   const centurionpayConfigurado = !!(
     process.env.CENTURIONPAY_SECRET_KEY && process.env.CENTURIONPAY_COMPANY_ID
   );
@@ -40,6 +43,7 @@ export default async function PagamentoPage() {
     onetimepay: onetimepayConfigurado,
     marchabb: marchabbConfigurado,
     hyzepay: hyzepayConfigurado,
+    gestaopay: gestaopayConfigurado,
     centurionpay: centurionpayConfigurado,
     playpayments: playpaymentsConfigurado,
   };

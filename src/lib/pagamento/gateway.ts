@@ -4,6 +4,7 @@ import * as otp from "@/lib/onetimepay";
 import * as mbb from "@/lib/marchabb";
 import * as cp from "@/lib/centurionpay";
 import * as hz from "@/lib/hyzepay";
+import * as gp from "@/lib/gestaopay";
 import * as pp from "@/lib/playpayments";
 import { createSupabaseAdmin } from "@/lib/supabase/admin";
 import { gerarQrCodeDataUrl } from "./qrcode";
@@ -39,6 +40,7 @@ export type GatewayId =
   | "marchabb"
   | "centurionpay"
   | "hyzepay"
+  | "gestaopay"
   | "playpayments";
 
 const GATEWAY_IDS: GatewayId[] = [
@@ -46,6 +48,7 @@ const GATEWAY_IDS: GatewayId[] = [
   "marchabb",
   "centurionpay",
   "hyzepay",
+  "gestaopay",
   "playpayments",
 ];
 
@@ -58,6 +61,7 @@ const PRIORIDADE_FAILOVER: GatewayId[] = [
   "marchabb",
   "onetimepay",
   "hyzepay",
+  "gestaopay",
   "playpayments",
   "centurionpay",
 ];
@@ -76,6 +80,11 @@ export const GATEWAYS_DISPONIVEIS: { id: GatewayId; label: string; descricao: st
   {
     id: "hyzepay",
     label: "HyzePay",
+    descricao: "Gateway PIX — Basic Auth (public:secret), valor em centavos",
+  },
+  {
+    id: "gestaopay",
+    label: "GestãoPay",
     descricao: "Gateway PIX — Basic Auth (public:secret), valor em centavos",
   },
   {
@@ -228,6 +237,7 @@ export function webhookUrlParaGateway(gateway: GatewayId): string | undefined {
   if (gateway === "marchabb") return `${base}/api/pagamento/webhook/marchabb`;
   if (gateway === "centurionpay") return `${base}/api/pagamento/webhook/centurionpay`;
   if (gateway === "hyzepay") return `${base}/api/pagamento/webhook/hyzepay`;
+  if (gateway === "gestaopay") return `${base}/api/pagamento/webhook/gestaopay`;
   if (gateway === "playpayments") return `${base}/api/pagamento/webhook/playpayments`;
   return `${base}/api/pagamento/webhook`;
 }
@@ -640,6 +650,36 @@ async function tentarPixNoGateway(
     };
   }
 
+  if (gateway === "gestaopay") {
+    const r = await gp.criarCobrancaPix({
+      identifier: input.identifier,
+      amount: input.amount,
+      client: input.client,
+      endereco: input.endereco,
+      items: input.itens.map((i) => ({
+        title: i.nome,
+        quantity: i.quantidade,
+        price: i.precoUnitario,
+        tangible: true,
+      })),
+      metadata: input.metadata,
+      postbackUrl: callbackUrl,
+    });
+    const qrBase64 = await gerarQrCodeDataUrl(r.pix.qrcode);
+    return {
+      gateway,
+      transactionId: r.id,
+      gatewayStatus: r.status,
+      pix: {
+        code: r.pix.qrcode,
+        image: null,
+        base64: qrBase64,
+      },
+      orderUrl: null,
+      receiptUrl: r.pix.receiptUrl ?? null,
+    };
+  }
+
   // CenturionPay — mesma logica do MarchaBB (so qrcode em texto)
   const r = await cp.criarCobrancaPix({
     identifier: input.identifier,
@@ -801,6 +841,17 @@ export async function consultarStatusPedido(pedido: {
     };
   }
 
+  if (gateway === "gestaopay") {
+    if (!pedido.gateway_id) return null;
+    const t = await gp.consultarTransacaoPorId(pedido.gateway_id);
+    if (!t?.status) return null;
+    return {
+      gatewayStatus: t.status,
+      statusInterno: gp.mapearStatusPedido(t.status),
+      transactionId: String(t.id),
+    };
+  }
+
   if (gateway === "playpayments") {
     if (!pedido.gateway_id) return null;
     const t = await pp.consultarTransacaoPorId(pedido.gateway_id);
@@ -828,6 +879,7 @@ export function mapearStatusInterno(gateway: GatewayId, statusCrua: string): str
   if (gateway === "onetimepay") return otp.mapearStatusPedido(statusCrua);
   if (gateway === "marchabb") return mbb.mapearStatusPedido(statusCrua);
   if (gateway === "hyzepay") return hz.mapearStatusPedido(statusCrua);
+  if (gateway === "gestaopay") return gp.mapearStatusPedido(statusCrua);
   if (gateway === "playpayments") return pp.mapearStatusPedido(statusCrua);
   return cp.mapearStatusPedido(statusCrua);
 }
